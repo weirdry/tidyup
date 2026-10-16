@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { utimesSync } from 'node:fs';
+import { chmodSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
@@ -48,6 +48,27 @@ describe('rust-target detector', () => {
     const recent = join(target, 'debug', 'build-output.bin');
     utimesSync(recent, new Date(), new Date());
     assert.deepEqual((await detect()).items, []);
+  });
+
+  test('a recently modified directory alone keeps it out', async () => {
+    const { target } = cargoProject(home, 'code/app');
+    utimesSync(join(target, 'debug'), new Date(), new Date());
+    assert.deepEqual((await detect()).items, []);
+  });
+
+  test('an unreadable directory is reported as skipped, not as an empty result', async () => {
+    cargoProject(home, 'code/readable');
+    writeFiles(join(home, 'code/locked'), { 'Cargo.toml': '[package]\n' });
+    const locked = join(home, 'code/locked');
+    chmodSync(locked, 0o000);
+    try {
+      const { items, skipped } = await detect();
+      assert.equal(items.length, 1);
+      assert.equal(skipped.length, 1);
+      assert.match(skipped[0].reason, /cannot read .*code\/locked: EACCES/);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 
   test('targets without a Cargo marker or without Cargo.toml are ignored', async () => {

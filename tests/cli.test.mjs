@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
@@ -81,6 +81,13 @@ describe('scan and apply', () => {
     assert.deepEqual(withRoot.items.map((item) => item.path), [target]);
   });
 
+  test('an explicit root nested in a default root reaches projects beyond the depth limit', async () => {
+    const { target } = cargoProject(home, 'code/a/b/c/d/e/app');
+    assert.deepEqual((await scanJson([], { percent: 5 })).report.items, []);
+    const nested = (await scanJson(['--root', join(home, 'code/a/b')], { percent: 5 })).report;
+    assert.deepEqual(nested.items.map((item) => item.path), [target]);
+  });
+
   test('human output lists candidates with home-relative paths', async () => {
     cargoProject(home, 'code/app');
     const result = await runMain(main, ['scan'], { home, percent: 5 });
@@ -146,6 +153,17 @@ describe('launcher', { skip: process.platform !== 'darwin' && 'macOS only' }, ()
     const result = launch(['--help'], { TIDYUP_NODE: join(fixtures, 'missing-node') });
     assert.equal(result.status, EXIT.error);
     assert.match(result.stderr, /TIDYUP_NODE=.* is not a Node\.js 22\+ executable/);
+  });
+
+  test('works through a symlinked skill installation', () => {
+    const installed = join(fixtures, 'installed-tidyup');
+    symlinkSync(join(import.meta.dirname, '..', 'skills', 'tidyup'), installed);
+    const result = spawnSync('sh', [join(installed, 'scripts', 'tidyup'), '--help'], {
+      encoding: 'utf8',
+      env: { ...process.env, TIDYUP_NODE: process.execPath },
+    });
+    assert.equal(result.status, EXIT.ok, result.stderr);
+    assert.match(result.stdout, /^Usage:/);
   });
 
   test('a Node older than 22 is rejected', () => {

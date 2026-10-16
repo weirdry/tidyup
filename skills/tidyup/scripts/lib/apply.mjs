@@ -1,15 +1,14 @@
-// `apply`: delete user-selected items after re-running their detectors.
-// An item is deleted only if a fresh detection still yields the same ID, its
-// class allows it, its real path is inside the detector's roots, and it is not a symlink.
+// `apply`: delete user-selected items. Candidates are re-discovered, then each
+// requested item is checked and, only if it still qualifies, removed right away,
+// so no other item's checks run between an item's eligibility check and its removal.
 import { lstat } from 'node:fs/promises';
 
 import { detectorFor } from './detectors/index.mjs';
 import { isInside, realpathOrNull } from './fsutil.mjs';
 import { measureHeadroom } from './headroom.mjs';
-import { runDetectors } from './scan.mjs';
 
-// Why `item.path` must not be removed now, or null. Detection only yields real
-// paths inside the roots; this re-check guards against changes since detection.
+// Why `item.path` must not be removed now, or null. Discovery only yields real
+// paths inside the roots; this re-check guards against changes since then.
 export async function removalRefusal(item, allowedRoots) {
   const stats = await lstat(item.path).catch(() => null);
   if (!stats) return 'path no longer exists';
@@ -19,41 +18,49 @@ export async function removalRefusal(item, allowedRoots) {
   return null;
 }
 
+async function processOne(id, { detector, candidate, reviewedSet, context }) {
+  if (!detector) return { id, outcome: 'refused', reason: 'unknown detector' };
+  if (!candidate) return { id, outcome: 'refused', reason: 'not found (pass the same --root options as scan)' };
+  const base = { id, path: candidate.path };
+  if (candidate.class === 'review' && !reviewedSet.has(id)) {
+    return { ...base, outcome: 'refused', reason: 'review item requires --reviewed' };
+  }
+  if (candidate.class !== 'routine' && candidate.class !== 'review') {
+    return { ...base, outcome: 'refused', reason: `${candidate.class} items cannot be applied` };
+  }
+  const pathReason = await removalRefusal(candidate, detector.allowedRoots(context));
+  if (pathReason) return { ...base, outcome: 'refused', reason: pathReason };
+  const verdict = await detector.evaluate(candidate, context);
+  if (!verdict.eligible) return { ...base, outcome: 'refused', reason: `no longer eligible: ${verdict.reason}` };
+  try {
+    await detector.remove(candidate);
+    return { ...base, outcome: 'deleted' };
+  } catch (error) {
+    return { ...base, outcome: 'failed', reason: error.message };
+  }
+}
+
 export async function apply({ ids, reviewed, home, roots, now, statfs }) {
   const before = await measureHeadroom(home, statfs);
   const requested = [...new Set([...ids, ...reviewed])];
   const reviewedSet = new Set(reviewed);
+  const context = { roots, now, home };
 
-  const detectors = [...new Set(requested.map(detectorFor).filter(Boolean))];
-  // Sizes are not needed to decide eligibility, and du over large trees is slow.
-  const context = { roots, now, home, estimate: false };
-  const { items, skipped } = await runDetectors(detectors, context);
-  const byId = new Map(items.map((item) => [item.id, item]));
+  const candidates = new Map();
+  const skipped = [];
+  for (const detector of new Set(requested.map(detectorFor).filter(Boolean))) {
+    try {
+      const result = await detector.discover(context);
+      for (const candidate of result.candidates) candidates.set(candidate.id, candidate);
+      skipped.push(...result.skipped);
+    } catch (error) {
+      skipped.push({ detector: detector.name, reason: error.message });
+    }
+  }
 
   const outcomes = [];
   for (const id of requested) {
-    const item = byId.get(id);
-    if (!detectorFor(id)) {
-      outcomes.push({ id, outcome: 'refused', reason: 'unknown detector' });
-    } else if (!item) {
-      outcomes.push({ id, outcome: 'refused', reason: 'not found or no longer eligible (pass the same --root options as scan)' });
-    } else if (item.class === 'review' && !reviewedSet.has(id)) {
-      outcomes.push({ id, path: item.path, outcome: 'refused', reason: 'review item requires --reviewed' });
-    } else if (item.class !== 'routine' && item.class !== 'review') {
-      outcomes.push({ id, path: item.path, outcome: 'refused', reason: `${item.class} items cannot be applied` });
-    } else {
-      const reason = await removalRefusal(item, detectorFor(id).allowedRoots(context));
-      if (reason) {
-        outcomes.push({ id, path: item.path, outcome: 'refused', reason });
-        continue;
-      }
-      try {
-        await detectorFor(id).remove(item);
-        outcomes.push({ id, path: item.path, outcome: 'deleted' });
-      } catch (error) {
-        outcomes.push({ id, path: item.path, outcome: 'failed', reason: error.message });
-      }
-    }
+    outcomes.push(await processOne(id, { detector: detectorFor(id), candidate: candidates.get(id), reviewedSet, context }));
   }
 
   const after = await measureHeadroom(home, statfs);

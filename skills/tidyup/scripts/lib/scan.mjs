@@ -6,14 +6,15 @@ import { hostname } from 'node:os';
 import { join } from 'node:path';
 
 import { DETECTORS } from './detectors/index.mjs';
-import { isInside, realpathOrNull } from './fsutil.mjs';
+import { realpathOrNull } from './fsutil.mjs';
 import { measureHeadroom } from './headroom.mjs';
 
 export const DEFAULT_ROOT_NAMES = ['code', 'src', 'Developer', 'projects', '_GIT', 'git', 'work'];
 
 // Real paths of existing project roots: the defaults under `home` plus `extra`.
-// An `extra` root that does not exist is an error. Roots nested in another root
-// are dropped because the outer walk already covers them.
+// An `extra` root that does not exist is an error. Nested roots are kept: the walk
+// is depth-limited and skips hidden directories, so an explicit inner root can
+// reach projects the outer walk cannot. Detectors deduplicate candidates.
 export async function resolveRoots(home, extra = []) {
   const resolved = [];
   for (const name of DEFAULT_ROOT_NAMES) {
@@ -25,8 +26,7 @@ export async function resolveRoots(home, extra = []) {
     if (!real || !(await stat(real)).isDirectory()) throw new Error(`root is not a directory: ${path}`);
     resolved.push(real);
   }
-  const unique = [...new Set(resolved)];
-  return unique.filter((root) => !unique.some((other) => other !== root && isInside(root, other)));
+  return [...new Set(resolved)];
 }
 
 // Runs the given detectors; a failing detector is reported in `skipped`.

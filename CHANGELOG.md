@@ -17,5 +17,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - returns the level as its exit code.
 - The `rust-target` detector finds idle Cargo `target/` directories under the
   project roots.
-- `apply` deletes the selected items after a fresh detection and a path re-check,
-  and reports one outcome per item.
+- `apply` deletes the selected items. For each item it re-checks the path and
+  re-evaluates eligibility immediately before removing it, and it reports one
+  outcome per item.

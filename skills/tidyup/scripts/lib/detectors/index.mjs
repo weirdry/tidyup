@@ -1,6 +1,10 @@
-// Registered detectors. Each has `name`, `class`, `detect(context)` returning
-// `{ items, skipped }` (sizes only when `context.estimate` is not false), `allowedRoots(context)` bounding where its items may
-// live, and `remove(item)` for classes that can be applied.
+// Registered detectors. Each provides:
+//   name, class
+//   discover(context)        → { candidates, skipped }: cheap candidate locations
+//   evaluate(candidate, ctx) → { eligible, reason, evidence, error }: eligibility now
+//   detect(context)          → { items, skipped }: eligible items with size estimates (scan)
+//   allowedRoots(context)    → real paths that bound where items may live
+//   remove(item)             → deletes one item (apply)
 import rustTarget from './rust-target.mjs';
 
 export const DETECTORS = [rustTarget];
