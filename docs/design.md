@@ -100,7 +100,7 @@ conversation.
 | `docker` (dangling images) | routine | dangling images used by no container | `docker image prune --force` |
 | `docker` (unused images) | review | tagged images used by no container, including stopped containers; one item per image | `docker image rm <ref>` for each tag |
 | `docker` (volumes) | judgment | all volumes as one item; the largest are listed in evidence | none |
-| `npm-cache`, `pnpm-store`, `uv-cache`, `go-build-cache`, `go-mod-cache` | routine | cache present | the tool's own command: `npm cache clean --force`, `pnpm store prune`, `uv cache prune`, `go clean -cache`, `go clean -modcache` |
+| `caches` (npm, pnpm, uv, Go build, Go modules) | routine | a cache directory reported by the tool exists | the tool's own command: `npm cache clean --force`, `pnpm store prune`, `uv cache clean`, `go clean -cache`, `go clean -modcache` |
 | `agent-scratch` | review | Claude Code session temp dirs (`/private/tmp/claude-<uid>/<project>/<session>`) idle 7 days. Codex locations are confirmed during implementation | remove directory |
 | `temp-clones` | review | git work trees under temp roots idle 7 days | linked worktrees: `git worktree remove`; others: remove directory |
 | `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
@@ -122,6 +122,26 @@ Docker Desktop, or OrbStack.
 - **Before removing any Docker item:** `apply` confirms the daemon ID is
   unchanged. For images, it also confirms the tags are unchanged and that no
   container uses the image.
+
+The `caches` detector asks each tool where its cache is: `npm config get
+cache`, `pnpm store path`, `uv cache dir`, `go env GOCACHE`, and
+`go env GOMODCACHE`. It runs these commands from the home directory, so a
+project's `.npmrc` or `uv.toml` does not apply. Cleaning always goes through the
+tool's own command; tidyup never deletes a tool's cache directory itself.
+
+- **pnpm:** `pnpm store prune` removes only unreferenced packages and has no dry
+  run, so the store size is reported as evidence and the estimate is unknown.
+  Deleting the whole store would free little anyway, because `node_modules`
+  directories hard-link into it.
+- **uv:** uses `uv cache clean`. `uv cache prune` removes only unreachable
+  entries and cannot preview its effect. Everything `clean` removes is
+  re-downloadable, and files cloned into virtual environments keep their data.
+
+External CLIs (docker and the package tools) are found on `PATH`, then in common
+install locations: Homebrew, `~/.local/bin`, mise shims, and tool-specific
+directories. They run with the running Node's directory first on `PATH`, so
+Node-based CLIs work from GUI apps and scheduled tasks. A tool that is not
+installed is silently absent.
 
 Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.

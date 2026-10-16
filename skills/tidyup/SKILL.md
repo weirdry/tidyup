@@ -8,10 +8,10 @@ description: "Measure and reclaim disk space on a macOS development machine. Use
 tidyup measures disk headroom and lists cleanup candidates with evidence. It
 deletes only the items the user selects.
 
-> **Status: v1 in progress.** Rust build output (`rust-target`) and Docker
-> (`docker`) are detected so far. For other space users (package caches, temp
-> clones, agent scratch), investigate manually. Show the user what you find, and
-> delete nothing without their explicit approval.
+> **Status: v1 in progress.** Rust build output (`rust-target`), Docker
+> (`docker`), and package caches (`caches`: npm, pnpm, uv, Go) are detected so
+> far. For other space users (temp clones, agent scratch), investigate manually.
+> Show the user what you find, and delete nothing without their explicit approval.
 
 ## Running
 
