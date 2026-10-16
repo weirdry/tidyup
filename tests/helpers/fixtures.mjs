@@ -125,7 +125,8 @@ export function fakeDocker(state = {}) {
 }
 
 // Fake npm, pnpm, uv and go CLIs sharing `state.json` in their directory, with
-// cache paths { npm, pnpm, uv, goCache, goModCache } (null: no cache). They log
+// cache paths { npm, pnpm, uv, goCache, goModCache } (null: no cache) and
+// `goEnvFlags`, standing in for GOFLAGS set in the user's go env file. They log
 // [tool, cwd, ...args] to `calls.log`. The shebang uses `env node` on purpose, so
 // they work only when the caller provides node on PATH, as tidyup does.
 const FAKE_TOOL = `#!/usr/bin/env node
@@ -137,18 +138,25 @@ const args = process.argv.slice(2);
 fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify([tool, process.cwd(), ...args]) + '\\n');
 const print = (value) => console.log(value ?? '');
 const wipe = (dir) => dir && fs.rmSync(dir, { recursive: true, force: true });
-const cmd = [tool, ...args].join(' ');
-if (cmd === 'npm config get cache') print(state.npm);
-else if (cmd === 'npm cache clean --force') wipe(state.npm && path.join(state.npm, '_cacache'));
-else if (cmd === 'pnpm store path') print(state.pnpm);
-else if (cmd === 'pnpm store prune') {}
-else if (cmd === 'uv cache dir') print(state.uv);
-else if (cmd === 'uv cache clean') wipe(state.uv);
-else if (cmd === 'go env GOCACHE') print(state.goCache);
-else if (cmd === 'go env GOMODCACHE') print(state.goModCache);
-else if (cmd === 'go clean -cache') wipe(state.goCache);
-else if (cmd === 'go clean -modcache') wipe(state.goModCache);
-else { process.stderr.write('unsupported: ' + cmd + '\\n'); process.exit(1); }
+const option = (name) => { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; };
+const has = (...words) => words.every((word, i) => args[i] === word);
+const fail = () => { process.stderr.write('unsupported: ' + tool + ' ' + args.join(' ') + '\\n'); process.exit(1); };
+// Like real go: env overrides the go env file unless GOENV=off; GOFLAGS applies to every command.
+const goVar = (name, fallback) => process.env[name] || fallback;
+const goFlags = (process.env.GOFLAGS || (process.env.GOENV === 'off' ? '' : state.goEnvFlags || '')).split(' ');
+if (tool === 'npm' && has('config', 'get', 'cache')) print(state.npm);
+else if (tool === 'npm' && has('cache', 'clean', '--force')) wipe(path.join(option('--cache') || state.npm, '_cacache'));
+else if (tool === 'pnpm' && has('store', 'path')) print(state.pnpm);
+else if (tool === 'pnpm' && has('store', 'prune')) {}
+else if (tool === 'uv' && has('cache', 'dir')) print(state.uv);
+else if (tool === 'uv' && has('cache', 'clean')) wipe(option('--cache-dir') || state.uv);
+else if (tool === 'go' && has('env', 'GOCACHE')) print(goVar('GOCACHE', state.goCache));
+else if (tool === 'go' && has('env', 'GOMODCACHE')) print(goVar('GOMODCACHE', state.goModCache));
+else if (tool === 'go' && has('clean')) {
+  const flags = [...goFlags, ...args.slice(1)];
+  if (flags.includes('-cache')) wipe(goVar('GOCACHE', state.goCache));
+  if (flags.includes('-modcache')) wipe(goVar('GOMODCACHE', state.goModCache));
+} else fail();
 `;
 
 export function fakeTools(state = {}) {

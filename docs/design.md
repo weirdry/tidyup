@@ -126,16 +126,31 @@ Docker Desktop, or OrbStack.
 The `caches` detector asks each tool where its cache is: `npm config get
 cache`, `pnpm store path`, `uv cache dir`, `go env GOCACHE`, and
 `go env GOMODCACHE`. It runs these commands from the home directory, so a
-project's `.npmrc` or `uv.toml` does not apply. Cleaning always goes through the
-tool's own command; tidyup never deletes a tool's cache directory itself.
+project's `.npmrc` or `uv.toml` does not apply.
+
+Cleaning always goes through the tool's own command, aimed at the located cache:
+
+- npm: `--cache`;
+- uv: `--cache-dir`;
+- Go: `GOCACHE` / `GOMODCACHE`, with `GOENV=off` and an empty `GOFLAGS`, so that
+  inherited flags such as `-modcache` cannot widen `go clean`.
+
+Right before cleaning, `apply` refuses if the tool now reports a different
+location. tidyup never deletes a tool's cache directory itself. A cache path
+that cannot be inspected (for example EACCES) is reported under `skipped`.
 
 - **pnpm:** `pnpm store prune` removes only unreferenced packages and has no dry
   run, so the store size is reported as evidence and the estimate is unknown.
-  Deleting the whole store would free little anyway, because `node_modules`
-  directories hard-link into it.
+  pnpm imports packages into `node_modules` by hard link by default (cloning and
+  copying are configurable), so deleting the whole store would often free little.
 - **uv:** uses `uv cache clean`. `uv cache prune` removes only unreachable
   entries and cannot preview its effect. Everything `clean` removes is
-  re-downloadable, and files cloned into virtual environments keep their data.
+  re-downloadable. With uv's default link mode on macOS (`clone`), installed
+  environments keep their data.
+  - If the global link mode is `symlink` (via `UV_LINK_MODE` or the user or
+    system `uv.toml`), environments point into the cache. The item then becomes
+    a review item with a warning.
+  - Project-level link-mode settings are not inspected.
 
 External CLIs (docker and the package tools) are found on `PATH`, then in common
 install locations: Homebrew, `~/.local/bin`, mise shims, and tool-specific
