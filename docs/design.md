@@ -72,8 +72,11 @@ On macOS this is normally the Data volume. The report names the measured path.
   estimates, and the sum is never presented as guaranteed reclaimable space.
 - Detailed measurement runs when the level is `recommend` or worse, or when the
   caller passes `--deep`. At `ok` without `--deep`, a scan reports only headroom.
+- Idle checks run `find <path> -newermt <cutoff> -print -quit` with the cutoff
+  and `TZ` both in UTC, so DST transitions cannot shift the window.
 - A detector that cannot run is listed under `skipped` with a reason. The scan
-  continues without it. Typical reasons are a missing CLI, a stopped daemon, a
+  continues without it. The same applies to a directory that cannot be read
+  during discovery. Typical reasons are a missing CLI, a stopped daemon, a
   permission denial (TCC or sandbox), or a timeout.
 
 ## Item classes
@@ -117,14 +120,16 @@ tidyup does not infer that a session has ended.
 ## Item IDs and `apply`
 
 IDs are `<detector>:<short hash of realpath>`. Docker items use the image ID.
-`apply` then:
+Each detector separates cheap *discovery* of candidate locations from the
+*evaluation* of whether a candidate qualifies now. `apply` then:
 
-1. re-runs the owning detectors for the requested IDs only;
-2. refuses any ID that is missing or no longer eligible;
-3. refuses any root that is a symlink, and any realpath that falls outside the
-   detector's root;
-4. performs the removal, never with `sudo`;
-5. reports one outcome per item: `deleted`, `refused (reason)`, or
+1. re-discovers candidates with the owning detectors, then handles each
+   requested ID in turn;
+2. refuses an ID that is not discovered, a symlink, or a realpath outside the
+   detector's roots;
+3. evaluates that item's eligibility and removes it immediately if it still
+   qualifies, never with `sudo`. No other item's checks run in between;
+4. reports one outcome per item: `deleted`, `refused (reason)`, or
    `failed (reason)`.
 
 `apply` checks current eligibility. It does not prove that nothing changed since

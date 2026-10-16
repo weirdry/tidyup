@@ -8,12 +8,14 @@ import { isAbsolute, sep } from 'node:path';
 
 const TOOL_TIMEOUT_MS = 10 * 60 * 1000;
 
+// TZ=UTC makes find's date parsing match findCutoff(), which formats in UTC, so
+// the cutoff stays unambiguous across DST transitions.
 function run(command, args) {
   return new Promise((resolve) => {
     execFile(
       command,
       args,
-      { env: { ...process.env, LC_ALL: 'C' }, timeout: TOOL_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+      { env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: TOOL_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
       (error, stdout, stderr) => resolve({ error, stdout, stderr }),
     );
   });
@@ -40,7 +42,7 @@ export async function estimateBytes(path) {
 // subtree cannot prove inactivity.
 export async function modifiedSince(path, since) {
   requireAbsolute(path);
-  const { error, stdout, stderr } = await run('find', [path, '-newermt', localTimestamp(since), '-print', '-quit']);
+  const { error, stdout, stderr } = await run('find', [path, '-newermt', findCutoff(since), '-print', '-quit']);
   if (stdout.trim() !== '') return true;
   if (error) throw new Error(`could not read all of ${path}: ${firstLine(stderr) || error.message}`);
   return false;
@@ -95,10 +97,9 @@ export async function mapLimit(items, limit, fn) {
   return results;
 }
 
-function localTimestamp(date) {
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
-    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+// `find -newermt` argument for `date`, in UTC (see run()).
+export function findCutoff(date) {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 function firstLine(text) {

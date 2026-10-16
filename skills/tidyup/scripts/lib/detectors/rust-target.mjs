@@ -7,26 +7,29 @@ import { join } from 'node:path';
 import { estimateBytes, itemId, mapLimit, modifiedSince } from '../fsutil.mjs';
 
 export const IDLE_DAYS = 14;
+const NAME = 'rust-target';
 const MAX_DEPTH = 4;
 const SKIP_DIRS = new Set(['node_modules', 'target']);
 // Cache Directory Tagging Specification signature, written by Cargo.
 const CACHEDIR_SIGNATURE = 'Signature: 8a477f597d28d172789f06886806bc55';
-
-async function entriesOf(dir) {
-  try {
-    return await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
+// A directory that vanished or is not a directory is simply absent; anything
+// else (EACCES, EPERM from TCC, ...) is a coverage gap worth reporting.
+const ABSENT = new Set(['ENOENT', 'ENOTDIR']);
 
 // Directories under `root` (depth ≤ MAX_DEPTH) holding Cargo.toml and a real
 // (non-symlink) target directory. Hidden directories, node_modules and target
-// directories are not descended into.
+// directories are not descended into. Unreadable directories are returned in `errors`.
 export async function findCargoTargets(root) {
   const found = [];
+  const errors = [];
   async function walk(dir, depth) {
-    const entries = await entriesOf(dir);
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if (!ABSENT.has(error.code)) errors.push(`cannot read ${dir}: ${error.code ?? error.message}`);
+      return;
+    }
     if (entries.some((e) => e.name === 'Cargo.toml' && e.isFile())) {
       if (entries.some((e) => e.name === 'target' && e.isDirectory())) {
         found.push({ project: dir, target: join(dir, 'target') });
@@ -40,20 +43,20 @@ export async function findCargoTargets(root) {
     }
   }
   await walk(root, 0);
-  return found;
+  return { found, errors };
 }
 
 // 'CACHEDIR.TAG' or 'fingerprint' when the directory looks like Cargo output, else null.
 // Some front ends (e.g. maturin) skip the tag, but every Cargo profile directory
-// holds a .fingerprint directory.
+// holds a .fingerprint directory. Throws when the target itself cannot be read.
 export async function cargoMarker(target) {
   try {
     const tag = await readFile(join(target, 'CACHEDIR.TAG'), 'utf8');
     if (tag.startsWith(CACHEDIR_SIGNATURE)) return 'CACHEDIR.TAG';
-  } catch {
-    // No tag; fall through to the fingerprint check.
+  } catch (error) {
+    if (!ABSENT.has(error.code)) throw error;
   }
-  for (const entry of await entriesOf(target)) {
+  for (const entry of await readdir(target, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     try {
       if ((await lstat(join(target, entry.name, '.fingerprint'))).isDirectory()) return 'fingerprint';
@@ -65,48 +68,52 @@ export async function cargoMarker(target) {
 }
 
 export default {
-  name: 'rust-target',
+  name: NAME,
   class: 'routine',
 
-  async detect({ roots, now, estimate = true }) {
-    const since = new Date(now.getTime() - IDLE_DAYS * 24 * 60 * 60 * 1000);
-    const seen = new Set();
-    const candidates = [];
+  // Candidate locations, without eligibility checks. Cheap: a bounded directory walk.
+  async discover({ roots }) {
+    const candidates = new Map();
+    const skipped = [];
     for (const root of roots) {
-      for (const found of await findCargoTargets(root)) {
-        if (seen.has(found.target)) continue;
-        seen.add(found.target);
-        candidates.push(found);
+      const { found, errors } = await findCargoTargets(root);
+      for (const reason of errors) skipped.push({ detector: NAME, reason });
+      for (const { project, target } of found) {
+        const id = itemId(NAME, target);
+        if (!candidates.has(id)) candidates.set(id, { id, class: 'routine', detector: NAME, path: target, project });
       }
     }
+    return { candidates: [...candidates.values()], skipped };
+  },
 
+  // Whether a candidate qualifies now. `error` is set when eligibility could not be determined.
+  async evaluate(candidate, { now }) {
+    const since = new Date(now.getTime() - IDLE_DAYS * 24 * 60 * 60 * 1000);
+    try {
+      const marker = await cargoMarker(candidate.path);
+      if (!marker) return { eligible: false, reason: 'no Cargo marker' };
+      if (await modifiedSince(candidate.path, since)) return { eligible: false, reason: `modified within ${IDLE_DAYS} days` };
+      return { eligible: true, evidence: { manifest: join(candidate.project, 'Cargo.toml'), marker, idle_days: IDLE_DAYS } };
+    } catch (error) {
+      return { eligible: false, reason: error.message, error: true };
+    }
+  },
+
+  async detect(context) {
+    const { candidates, skipped } = await this.discover(context);
     const items = [];
-    const skipped = [];
-    await mapLimit(candidates, 4, async ({ project, target }) => {
-      const marker = await cargoMarker(target);
-      if (!marker) return;
-      try {
-        if (await modifiedSince(target, since)) return;
-      } catch (error) {
-        skipped.push({ detector: 'rust-target', reason: error.message });
-        return;
-      }
+    await mapLimit(candidates, 4, async (candidate) => {
+      const verdict = await this.evaluate(candidate, context);
+      if (verdict.error) skipped.push({ detector: NAME, reason: verdict.reason });
+      if (!verdict.eligible) return;
       let bytes = null;
-      if (estimate) {
-        try {
-          bytes = await estimateBytes(target);
-        } catch (error) {
-          skipped.push({ detector: 'rust-target', reason: error.message });
-        }
+      try {
+        bytes = await estimateBytes(candidate.path);
+      } catch (error) {
+        skipped.push({ detector: NAME, reason: error.message });
       }
-      items.push({
-        id: itemId('rust-target', target),
-        class: 'routine',
-        detector: 'rust-target',
-        path: target,
-        estimated_bytes: bytes,
-        evidence: { manifest: join(project, 'Cargo.toml'), marker, idle_days: IDLE_DAYS },
-      });
+      const { project, ...item } = candidate;
+      items.push({ ...item, estimated_bytes: bytes, evidence: verdict.evidence });
     });
     items.sort((a, b) => a.path.localeCompare(b.path));
     return { items, skipped };
