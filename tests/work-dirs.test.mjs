@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
-import { tempClones } from '../skills/tidyup/scripts/lib/detectors/work-dirs.mjs';
+import { discoveryFailures, tempClones } from '../skills/tidyup/scripts/lib/detectors/work-dirs.mjs';
 import { countStatus, findWorkTrees } from '../skills/tidyup/scripts/lib/git.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { age, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
@@ -379,4 +379,13 @@ test('summaries never present unreadable trees as zeros', async () => {
   assert.equal(summarizeFacts([unreadable]), '1 git work tree(s), unreadable (not a git repository)');
   const readable = { path: '/y', linked: false, changed: 2, ignored: 0, only_here: 1, stashes: 0 };
   assert.match(summarizeFacts([readable, unreadable]), /2 git work tree\(s\), 2 changed, 1 commit\(s\) only here, .*1 unreadable, not counted/);
+});
+
+test('many discovery failures are reported as one entry, a few individually', () => {
+  const few = ['cannot read /a: EACCES', 'cannot read /b: EPERM'];
+  assert.deepEqual(discoveryFailures('temp-clones', few).map((e) => e.reason), few);
+  const many = Array.from({ length: 60 }, (_, i) => `cannot read /t/${i}/TemporaryItems: EPERM`);
+  const [entry] = discoveryFailures('temp-clones', many);
+  assert.equal(discoveryFailures('temp-clones', many).length, 1);
+  assert.match(entry.reason, /^60 directories could not be read, e\.g\. cannot read \/t\/0\/TemporaryItems: EPERM$/);
 });

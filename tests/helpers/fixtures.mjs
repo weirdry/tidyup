@@ -124,9 +124,11 @@ export function fakeDocker(state = {}) {
   };
 }
 
-// Fake npm, pnpm, uv and go CLIs sharing `state.json` in their directory, with
-// cache paths { npm, pnpm, uv, goCache, goModCache } (null: no cache) and
-// `goEnvFlags`, standing in for GOFLAGS set in the user's go env file. They log
+// Fake npm, pnpm, uv, go, brew and mdfind CLIs sharing `state.json` in their
+// directory, with cache paths { npm, pnpm, uv, goCache, goModCache } (null: no
+// cache), `goEnvFlags` (standing in for GOFLAGS set in the user's go env file),
+// `brewDryRun` (the text `brew cleanup --dry-run` prints), and `apps`
+// ([path, bundle id] pairs Spotlight reports as installed). They log
 // [tool, cwd, ...args] to `calls.log`. The shebang uses `env node` on purpose, so
 // they work only when the caller provides node on PATH, as tidyup does.
 const FAKE_TOOL = `#!/usr/bin/env node
@@ -156,14 +158,21 @@ else if (tool === 'go' && has('clean')) {
   const flags = [...goFlags, ...args.slice(1)];
   if (flags.includes('-cache')) wipe(goVar('GOCACHE', state.goCache));
   if (flags.includes('-modcache')) wipe(goVar('GOMODCACHE', state.goModCache));
+} else if (tool === 'brew' && has('cleanup', '--dry-run')) process.stdout.write(state.brewDryRun ?? '');
+else if (tool === 'mdfind') {
+  for (const [path, id] of state.apps) console.log(path + '   kMDItemCFBundleIdentifier = ' + id);
 } else fail();
 `;
 
 export function fakeTools(state = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tidyup-tools-'));
-  writeFileSync(join(dir, 'state.json'), JSON.stringify({ npm: null, pnpm: null, uv: null, goCache: null, goModCache: null, ...state }));
+  writeFileSync(join(dir, 'state.json'), JSON.stringify({
+    npm: null, pnpm: null, uv: null, goCache: null, goModCache: null,
+    brewDryRun: '', apps: [['/System/Library/CoreServices/Finder.app', 'com.apple.finder']],
+    ...state,
+  }));
   writeFileSync(join(dir, 'calls.log'), '');
-  for (const tool of ['npm', 'pnpm', 'uv', 'go']) writeFileSync(join(dir, tool), FAKE_TOOL, { mode: 0o755 });
+  for (const tool of ['npm', 'pnpm', 'uv', 'go', 'brew', 'mdfind']) writeFileSync(join(dir, tool), FAKE_TOOL, { mode: 0o755 });
   return {
     dir,
     calls: () => readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)),
