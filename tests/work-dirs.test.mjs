@@ -8,8 +8,11 @@ import { countStatus } from '../skills/tidyup/scripts/lib/git.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { age, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
 
+// Fixture git commands. Background maintenance is disabled so that nothing writes
+// into a repository after the test has aged its files.
 function git(cwd, ...args) {
-  const result = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', '-c', 'init.defaultBranch=main', ...args], {
+  const config = ['user.name=t', 'user.email=t@example.com', 'init.defaultBranch=main', 'maintenance.auto=false', 'gc.auto=0'];
+  const result = spawnSync('git', [...config.flatMap((entry) => ['-c', entry]), ...args], {
     cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
   });
   assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
