@@ -40,7 +40,10 @@ export function renderScan(report, home) {
     const judged = report.items.filter((item) => item.class === 'judgment' && item.evidence?.summary);
     if (judged.length > 0) {
       lines.push('Judgment items (tidyup never deletes these; the user decides):');
-      for (const item of judged) lines.push(`  ${describe(item, home)}: ${item.evidence.summary}`);
+      for (const item of judged) {
+        lines.push(`  ${describe(item, home)}: ${item.evidence.summary}`);
+        if (item.evidence.hint) lines.push(`    hint: ${item.evidence.hint}`);
+      }
       lines.push('');
     }
     const routine = report.items.filter((item) => item.class === 'routine');

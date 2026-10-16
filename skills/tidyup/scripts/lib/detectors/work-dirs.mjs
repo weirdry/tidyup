@@ -69,11 +69,19 @@ async function removeTree(path) {
   await rm(path, { recursive: true, force: true });
 }
 
-// Read failures during discovery, as `skipped` entries. Many at once (macOS keeps
-// per-service TemporaryItems folders private) are reported as one entry.
+// Read failures during discovery, as `skipped` entries. Privacy denials (EPERM)
+// come in bulk, because macOS keeps per-service TemporaryItems folders private, so
+// many of them are reported as one entry. Every other failure is listed on its own.
 export function discoveryFailures(name, errors, limit = 3) {
-  if (errors.length <= limit) return errors.map((reason) => ({ detector: name, reason }));
-  return [{ detector: name, reason: `${errors.length} directories could not be read, e.g. ${errors[0]}` }];
+  const denials = errors.filter((reason) => reason.endsWith(': EPERM'));
+  const others = errors.filter((reason) => !reason.endsWith(': EPERM'));
+  const entries = others.map((reason) => ({ detector: name, reason }));
+  if (denials.length > limit) {
+    entries.push({ detector: name, reason: `${denials.length} directories are private to macOS services (EPERM), e.g. ${denials[0]}` });
+  } else {
+    entries.push(...denials.map((reason) => ({ detector: name, reason })));
+  }
+  return entries;
 }
 
 // `finalCheck(candidate, context, since)` runs last in evaluation and returns

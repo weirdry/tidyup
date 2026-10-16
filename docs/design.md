@@ -169,6 +169,12 @@ installed is silently absent.
 Judgment detectors never offer IDs. Each item carries `evidence.summary` and
 `evidence.hint`, which the scan prints under "Judgment items".
 
+- **Hugging Face path settings:** they expand `~` and `$VAR` as Hugging Face
+  does.
+- **Measurement gaps:** a failed or incomplete `du`, or an unreadable cache, is
+  reported under `skipped`. Traversals are bounded in time.
+- **Homebrew:** its dry-run sizes use decimal units.
+
 - **app-containers:** relies on one Spotlight query for the bundle identifiers
   of installed apps. An identifier counts as installed when an app's identifier
   equals it or is its parent, as with extensions and helpers. If Spotlight does
@@ -177,9 +183,10 @@ Judgment detectors never offer IDs. Each item carries `evidence.summary` and
   cannot be identified.
 - **Size floors:** they keep hundreds of small containers out of the table.
 
-Discovery failures are reported, never treated as absence. When there are more
-than three, they are summarized in one `skipped` entry, because macOS keeps many
-per-service `TemporaryItems` folders private.
+Discovery failures are reported, never treated as absence. More than three
+privacy denials (EPERM) are summarized in one `skipped` entry, because macOS
+keeps many per-service `TemporaryItems` folders private. Every other failure is
+listed on its own.
 
 Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.

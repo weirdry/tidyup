@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
 import {
-  LEFTOVER_MIN_BYTES, UNIDENTIFIED_MIN_BYTES, huggingFaceHub, isInstalled, leftoverContainers, parseBrewFree,
+  LEFTOVER_MIN_BYTES, UNIDENTIFIED_MIN_BYTES, expandPath, huggingFaceHub, isInstalled, leftoverContainers, parseBrewFree,
 } from '../skills/tidyup/scripts/lib/detectors/judgment.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { fakeTools, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
@@ -11,10 +12,17 @@ import { fakeTools, makeHome, removeTree, runMain, writeFiles } from './helpers/
 const GiB = 1024 ** 3;
 
 describe('judgment helpers', () => {
-  test('brew dry-run output is parsed with binary multiples', () => {
-    assert.equal(parseBrewFree('==> This operation would free approximately 1.5GB of disk space.'), Math.round(1.5 * GiB));
-    assert.equal(parseBrewFree('==> This operation would free approximately 34.6MB of disk space.'), Math.round(34.6 * 1024 ** 2));
+  test('brew dry-run output is parsed with decimal units, as Homebrew formats it', () => {
+    assert.equal(parseBrewFree('==> This operation would free approximately 1.5GB of disk space.'), 1_500_000_000);
+    assert.equal(parseBrewFree('==> This operation would free approximately 34.6MB of disk space.'), 34_600_000);
     assert.equal(parseBrewFree('nothing to clean'), null);
+  });
+
+  test('Hugging Face path settings expand ~ and environment references', () => {
+    assert.equal(expandPath('~/models', {}, '/home/u'), '/home/u/models');
+    assert.equal(expandPath('$DATA/hf', { DATA: '/data' }, '/home/u'), '/data/hf');
+    assert.equal(expandPath('${DATA}/hf', { DATA: '/data' }, '/home/u'), '/data/hf');
+    assert.equal(huggingFaceHub({ HF_HOME: '~/hf' }, '/home/u'), '/home/u/hf/hub');
   });
 
   test('the Hugging Face hub location follows HF_HUB_CACHE, HF_HOME, then XDG', () => {
@@ -76,7 +84,20 @@ describe('judgment detectors through the CLI', () => {
     assert.match(item.label, /2 models/);
 
     const human = await runMain(main, ['scan'], { home, percent: 5, tools });
-    assert.match(human.stdout, /Judgment items .*\n.*Hugging Face model cache .*: largest: org\/big/);
+    assert.match(human.stdout, /Judgment items .*\n.*Hugging Face model cache .*: largest: org\/big.*\n\s+hint: huggingface-cli delete-cache/);
+  });
+
+  test('a model cache that cannot be read is reported, not silently missing', async () => {
+    writeFiles(home, { '.cache/huggingface/hub/models--org--m/blobs/a': 'x' });
+    const hubParent = join(home, '.cache/huggingface');
+    chmodSync(hubParent, 0o000);
+    try {
+      const report = await scan();
+      assert.deepEqual(judgment(report, 'model-caches'), []);
+      assert.ok(report.skipped.some((entry) => entry.detector === 'model-caches' && /EACCES/.test(entry.reason)), JSON.stringify(report.skipped));
+    } finally {
+      chmodSync(hubParent, 0o755);
+    }
   });
 
   test('HF_HUB_CACHE moves the model cache', async () => {
@@ -88,7 +109,7 @@ describe('judgment detectors through the CLI', () => {
   test('brew cleanup is a judgment item sized by its dry run, absent when nothing would be freed', async () => {
     tools.update({ brewDryRun: 'Would remove: /x (1 file, 1KB)\n==> This operation would free approximately 1.5GB of disk space.\n' });
     const [item] = judgment(await scan(), 'homebrew');
-    assert.equal(item.estimated_bytes, Math.round(1.5 * GiB));
+    assert.equal(item.estimated_bytes, 1_500_000_000);
     assert.match(item.evidence.summary, /old installed formula versions/);
 
     tools.update({ brewDryRun: '' });

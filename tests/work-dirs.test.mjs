@@ -381,11 +381,13 @@ test('summaries never present unreadable trees as zeros', async () => {
   assert.match(summarizeFacts([readable, unreadable]), /2 git work tree\(s\), 2 changed, 1 commit\(s\) only here, .*1 unreadable, not counted/);
 });
 
-test('many discovery failures are reported as one entry, a few individually', () => {
+test('many privacy denials are reported as one entry; other failures stay individual', () => {
   const few = ['cannot read /a: EACCES', 'cannot read /b: EPERM'];
   assert.deepEqual(discoveryFailures('temp-clones', few).map((e) => e.reason), few);
-  const many = Array.from({ length: 60 }, (_, i) => `cannot read /t/${i}/TemporaryItems: EPERM`);
-  const [entry] = discoveryFailures('temp-clones', many);
-  assert.equal(discoveryFailures('temp-clones', many).length, 1);
-  assert.match(entry.reason, /^60 directories could not be read, e\.g\. cannot read \/t\/0\/TemporaryItems: EPERM$/);
+  const denials = Array.from({ length: 60 }, (_, i) => `cannot read /t/${i}/TemporaryItems: EPERM`);
+  const reasons = discoveryFailures('temp-clones', [...denials, 'cannot read /project/broken: EIO']).map((e) => e.reason);
+  assert.deepEqual(reasons, [
+    'cannot read /project/broken: EIO',
+    '60 directories are private to macOS services (EPERM), e.g. cannot read /t/0/TemporaryItems: EPERM',
+  ]);
 });
