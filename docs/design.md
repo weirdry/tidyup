@@ -141,15 +141,19 @@ that cannot be inspected (for example EACCES) is reported under `skipped`.
 
 - **pnpm:** `pnpm store prune` removes only unreferenced packages and has no dry
   run, so the store size is reported as evidence and the estimate is unknown.
-  pnpm imports packages into `node_modules` by hard link by default (cloning and
-  copying are configurable), so deleting the whole store would often free little.
+  pnpm's default import method (`auto`) clones files into `node_modules` where
+  the filesystem supports it (APFS does), and otherwise hard-links them. Either
+  way the store's data stays shared, so deleting the whole store would often
+  free little.
 - **uv:** uses `uv cache clean`. `uv cache prune` removes only unreachable
   entries and cannot preview its effect. Everything `clean` removes is
   re-downloadable. With uv's default link mode on macOS (`clone`), installed
   environments keep their data.
-  - If the global link mode is `symlink` (via `UV_LINK_MODE` or the user or
-    system `uv.toml`), environments point into the cache. The item then becomes
-    a review item with a warning.
+  - With link mode `symlink`, environments point into the cache. If `symlink`
+    appears anywhere in the global configuration, the item becomes a review item
+    with a warning. The global configuration means `UV_LINK_MODE`, plus any
+    `link-mode` value in the global config files: `UV_CONFIG_FILE`, or else the
+    user and system `uv.toml`, in any section or inline table such as `[pip]`.
   - Project-level link-mode settings are not inspected.
 
 External CLIs (docker and the package tools) are found on `PATH`, then in common

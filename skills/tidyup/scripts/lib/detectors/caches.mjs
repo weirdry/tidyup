@@ -75,20 +75,24 @@ async function isDirectory(path) {
   }
 }
 
-// uv's global link mode. With `symlink`, environments point into the cache and
-// break when it is cleaned. Project-level settings are not inspected.
-export async function uvLinkMode(env, home) {
-  if (env.UV_LINK_MODE) return env.UV_LINK_MODE;
+// Every uv link mode set globally: UV_LINK_MODE, and any `link-mode` value in the
+// global config files (UV_CONFIG_FILE, or the user and system uv.toml), in any
+// section or inline table, such as [pip]. With `symlink`, environments point into
+// the cache and break when it is cleaned. Project-level settings are not inspected.
+export async function uvLinkModes(env, home) {
+  const modes = env.UV_LINK_MODE ? [env.UV_LINK_MODE] : [];
   const userConfig = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, 'uv', 'uv.toml') : join(home, '.config', 'uv', 'uv.toml');
-  for (const file of [userConfig, '/etc/uv/uv.toml']) {
+  const files = env.UV_CONFIG_FILE ? [env.UV_CONFIG_FILE] : [userConfig, '/etc/uv/uv.toml'];
+  for (const file of files) {
+    let text;
     try {
-      const match = /^\s*link-mode\s*=\s*["']([a-z-]+)["']/m.exec(await readFile(file, 'utf8'));
-      if (match) return match[1];
+      text = await readFile(file, 'utf8');
     } catch {
-      // No config file.
+      continue; // No config file.
     }
+    for (const match of text.matchAll(/link-mode\s*=\s*["']([a-z-]+)["']/g)) modes.push(match[1]);
   }
-  return 'clone (default on macOS)';
+  return modes;
 }
 
 // The cache directory for `spec` and a runner for its tool, or null when the tool
@@ -110,8 +114,9 @@ async function candidateFor(spec, path, context) {
   const evidence = { path, command };
   let itemClass = 'routine';
   if (spec.kind === 'uv') {
-    evidence.link_mode = await uvLinkMode(context.env, home);
-    if (evidence.link_mode === 'symlink') {
+    const modes = await uvLinkModes(context.env, home);
+    evidence.link_mode = modes.length > 0 ? [...new Set(modes)].join(', ') : 'clone (default on macOS)';
+    if (modes.includes('symlink')) {
       itemClass = 'review';
       evidence.warning = 'uv link-mode is symlink: environments linked into this cache break when it is cleaned';
     }

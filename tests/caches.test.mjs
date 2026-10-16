@@ -105,7 +105,16 @@ describe('package caches', () => {
     const fromConfig = (await cacheItems()).find((item) => item.kind === 'uv');
     assert.equal(fromConfig.class, 'review');
 
-    writeFiles(home, { '.config/uv/uv.toml': '# default\n' });
+    writeFiles(home, { '.config/uv/uv.toml': 'link-mode = "clone"\n\n[pip]\nlink-mode = "symlink"\n' });
+    const pipOverride = (await cacheItems()).find((item) => item.kind === 'uv');
+    assert.equal(pipOverride.class, 'review');
+
+    writeFiles(home, { 'custom/uv.toml': 'pip = { link-mode = "symlink" }\n', '.config/uv/uv.toml': '# default\n' });
+    const viaConfigFile = JSON.parse((await runMain(main, ['scan', '--json'], {
+      home, percent: 5, tools, env: { UV_CONFIG_FILE: join(home, 'custom/uv.toml') },
+    })).stdout).items.find((item) => item.kind === 'uv');
+    assert.equal(viaConfigFile.class, 'review');
+
     const byDefault = (await cacheItems()).find((item) => item.kind === 'uv');
     assert.equal(byDefault.class, 'routine');
     assert.match(byDefault.evidence.link_mode, /clone/);
