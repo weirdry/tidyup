@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
@@ -246,7 +246,8 @@ describe('temp-clones and agent-scratch', () => {
     writeFiles(tmp, { 'task/wt/.git': 'gitdir: /nowhere\n', 'task/wt/file.txt': 'x' });
     writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
 case "$*" in
-  *rev-parse*) echo /repo/.git/worktrees/wt; echo /repo/.git ;;
+  *--git-common-dir*) echo /repo/.git ;;
+  *--git-dir*) echo /repo/.git/worktrees/wt ;;
   *"worktree remove"*)
     /bin/rm -rf '${join(tmp, 'task/wt')}'
     /bin/mv '${join(tmp, 'task')}' '${join(home, 'moved-task')}'
@@ -286,6 +287,39 @@ esac
     assert.equal(result.outcomes[0].outcome, 'deleted', JSON.stringify(result.outcomes));
   });
 
+  test('a .git file that git cannot classify stops the removal', async () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), 'tidyup-fake-git-'));
+    homes.push(fakeDir);
+    writeFiles(tmp, { 'task/wt/.git': 'gitdir: /nowhere\n', 'task/wt/work.txt': 'x' });
+    writeFileSync(join(fakeDir, 'git'), '#!/bin/sh\necho "fatal: not a git repository" >&2\nexit 128\n', { mode: 0o755 });
+    const item = { id: 'temp-clones:x', class: 'review', detector: 'temp-clones', path: join(tmp, 'task') };
+    const context = { env: { HOME: home, PATH: fakeDir }, home, now: new Date(), paths: paths() };
+    await assert.rejects(tempClones.remove(item, context), /cannot tell whether .* is a linked worktree/);
+    assert.equal(existsSync(join(tmp, 'task/wt/work.txt')), true);
+  });
+
+  test('linked-worktree classification handles directories whose names contain newlines', async () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), 'tidyup-fake-git-'));
+    homes.push(fakeDir);
+    const log = join(fakeDir, 'calls.log');
+    writeFiles(tmp, { 'task/wt/.git': 'gitdir: /x\n' });
+    // Answers each flag with a path containing newlines; a combined query would read
+    // "/a" twice and wrongly call this worktree "own".
+    writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
+echo "$*" >> '${log}'
+case "$*" in
+  *"--git-dir --git-common-dir"*) printf '/a\\n/a\\n/.git/worktrees/wt\\n/a\\n/a\\n/.git\\n' ;;
+  *--git-common-dir*) printf '/a\\n/a\\n/.git\\n' ;;
+  *--git-dir*) printf '/a\\n/a\\n/.git/worktrees/wt\\n' ;;
+  *"worktree remove"*) /bin/rm -rf '${join(tmp, 'task/wt')}' ;;
+esac
+`, { mode: 0o755 });
+    const item = { id: 'temp-clones:x', class: 'review', detector: 'temp-clones', path: join(tmp, 'task') };
+    const context = { env: { HOME: home, PATH: fakeDir }, home, now: new Date(), paths: paths() };
+    await tempClones.remove(item, context);
+    assert.match(readFileSync(log, 'utf8'), /worktree remove/);
+  });
+
   test('a failure to inspect the item after worktree removal is an error, not success', async () => {
     const fakeDir = mkdtempSync(join(tmpdir(), 'tidyup-fake-git-'));
     homes.push(fakeDir);
@@ -293,7 +327,8 @@ esac
     // rev-parse reports a linked worktree; worktree remove deletes it and locks the parent.
     writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
 case "$*" in
-  *rev-parse*) echo /repo/.git/worktrees/wt; echo /repo/.git ;;
+  *--git-common-dir*) echo /repo/.git ;;
+  *--git-dir*) echo /repo/.git/worktrees/wt ;;
   *"worktree remove"*) /bin/rm -rf '${join(tmp, 'task/wt')}'; /bin/chmod 000 '${tmp}' ;;
 esac
 `, { mode: 0o755 });
