@@ -18,30 +18,52 @@ export const UNIDENTIFIED_MIN_BYTES = 1024 * MiB;
 const UUID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
 const none = { candidates: [], skipped: [] };
+const TRAVERSAL_TIMEOUT_MS = 10 * 60 * 1000;
 
-// `du -k -d 1 <dir>`: sizes of `dir`'s children in one traversal. Entries du
-// cannot read are returned in `unreadable`.
+// `du -k -d 1 <dir>`: sizes of `dir`'s children in one traversal, bounded in time.
+// Entries du cannot read are returned in `unreadable`; `error` is set when du did
+// not finish normally for another reason (timeout, buffer, crash), in which case
+// `sizes` may be incomplete.
 function childSizes(dir) {
   return new Promise((resolve) => {
-    execFile('du', ['-k', '-d', '1', dir], { env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 16 * MiB }, (error, stdout, stderr) => {
+    execFile('du', ['-k', '-d', '1', dir], {
+      env: { ...process.env, LC_ALL: 'C' }, maxBuffer: 16 * MiB, timeout: TRAVERSAL_TIMEOUT_MS,
+    }, (error, stdout, stderr) => {
       const sizes = new Map();
       for (const line of stdout.split('\n')) {
         const match = /^(\d+)\t(.+)$/.exec(line);
         if (match && match[2] !== dir) sizes.set(match[2], Number(match[1]) * 1024);
       }
       const unreadable = stderr.split('\n').filter((line) => line.startsWith('du: ')).map((line) => line.slice(4));
-      resolve({ sizes, unreadable, failed: Boolean(error) && sizes.size === 0 });
+      // du exits 1 when some entries are unreadable; anything else is an incomplete run.
+      const incomplete = error && (error.killed || error.code !== 1 || unreadable.length === 0);
+      resolve({ sizes, unreadable, error: incomplete ? `du did not complete for ${dir}: ${error.killed ? 'timed out' : error.message}` : null });
     });
   });
+}
+
+// Skipped entries describing what a measurement could not cover.
+function measurementGaps(detector, { unreadable, error }) {
+  const gaps = [];
+  if (error) gaps.push({ detector, reason: error });
+  if (unreadable.length > 0) gaps.push({ detector, reason: `${unreadable.length} entries could not be measured, e.g. ${unreadable[0]}` });
+  return gaps;
+}
+
+// Expands $VAR, ${VAR} and a leading ~, as Hugging Face does for its path settings.
+export function expandPath(value, env, home) {
+  const expanded = value.replace(/\$\{(\w+)\}|\$(\w+)/g, (match, braced, bare) => env[braced ?? bare] ?? match);
+  return expanded === '~' || expanded.startsWith('~/') ? join(home, expanded.slice(1)) : expanded;
 }
 
 const largestList = (entries, count = 3) =>
   entries.slice(0, count).map((entry) => `${entry.name} (${formatBytes(entry.bytes)})`).join(', ');
 
 export function huggingFaceHub(env, home) {
-  if (env.HF_HUB_CACHE) return env.HF_HUB_CACHE;
-  if (env.HUGGINGFACE_HUB_CACHE) return env.HUGGINGFACE_HUB_CACHE;
-  const hfHome = env.HF_HOME ?? join(env.XDG_CACHE_HOME ?? join(home, '.cache'), 'huggingface');
+  const expand = (value) => expandPath(value, env, home);
+  if (env.HF_HUB_CACHE) return expand(env.HF_HUB_CACHE);
+  if (env.HUGGINGFACE_HUB_CACHE) return expand(env.HUGGINGFACE_HUB_CACHE);
+  const hfHome = env.HF_HOME ? expand(env.HF_HOME) : join(env.XDG_CACHE_HOME ? expand(env.XDG_CACHE_HOME) : join(home, '.cache'), 'huggingface');
   return join(hfHome, 'hub');
 }
 
@@ -50,14 +72,21 @@ export const modelCaches = {
   discover: async () => none,
 
   async detect(context) {
-    const hub = await realpathOrNull(huggingFaceHub(context.env, context.env.HOME ?? context.home));
-    if (!hub || !(await stat(hub)).isDirectory()) return { items: [], skipped: [] };
-    const { sizes, unreadable } = await childSizes(hub);
-    const models = [...sizes]
+    const location = huggingFaceHub(context.env, context.env.HOME ?? context.home);
+    try {
+      if (!(await stat(location)).isDirectory()) return { items: [], skipped: [] };
+    } catch (error) {
+      if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { items: [], skipped: [] };
+      return { items: [], skipped: [{ detector: 'model-caches', reason: `cannot inspect ${location}: ${error.code ?? error.message}` }] };
+    }
+    const hub = (await realpathOrNull(location)) ?? location;
+    const measured = await childSizes(hub);
+    const skipped = measurementGaps('model-caches', measured);
+    const models = [...measured.sizes]
       .filter(([path]) => basename(path).startsWith('models--'))
       .map(([path, bytes]) => ({ name: basename(path).slice('models--'.length).replace('--', '/'), bytes }))
       .sort((a, b) => b.bytes - a.bytes);
-    if (models.length === 0) return { items: [], skipped: [] };
+    if (models.length === 0) return { items: [], skipped };
     const total = models.reduce((sum, model) => sum + model.bytes, 0);
     return {
       items: [{
@@ -73,7 +102,7 @@ export const modelCaches = {
           summary: `largest: ${largestList(models)}`,
         },
       }],
-      skipped: unreadable.length > 0 ? [{ detector: 'model-caches', reason: `${unreadable.length} entries could not be measured` }] : [],
+      skipped,
     };
   },
 };
@@ -134,7 +163,7 @@ export const appContainers = {
     const installed = await installedBundleIds(context.env);
     if (!installed) return { items: [], skipped: [{ detector: 'app-containers', reason: 'Spotlight is unavailable, so installed apps cannot be identified' }] };
 
-    const { sizes, unreadable } = await childSizes(root);
+    const { sizes, unreadable, error: duError } = await childSizes(root);
     const items = [];
     for (const { path, id, bytes, identified } of leftoverContainers(sizes, installed)) {
       const modified = (await stat(path).catch(() => null))?.mtime;
@@ -158,17 +187,18 @@ export const appContainers = {
     const skipped = thirdPartyUnreadable.length > 0
       ? [{ detector: 'app-containers', reason: `${thirdPartyUnreadable.length} third-party container entries could not be measured (macOS privacy protection)` }]
       : [];
+    if (duError) skipped.push({ detector: 'app-containers', reason: duError });
     return { items, skipped };
   },
 };
 
-// Parses "This operation would free approximately 1.5GB of disk space." Homebrew
-// reports binary multiples with decimal-looking units.
+// Parses "This operation would free approximately 1.5GB of disk space."
+// Homebrew's formatter uses decimal units (1 GB = 1000^3 bytes).
 export function parseBrewFree(output) {
   const match = /would free approximately ([\d.]+)\s*([KMGT]?B)/.exec(output);
   if (!match) return null;
   const power = ['B', 'KB', 'MB', 'GB', 'TB'].indexOf(match[2]);
-  return Math.round(Number(match[1]) * 1024 ** power);
+  return Math.round(Number(match[1]) * 1000 ** power);
 }
 
 export const homebrew = {

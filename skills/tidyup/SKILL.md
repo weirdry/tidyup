@@ -51,8 +51,11 @@ for the Node path and pass it as `TIDYUP_NODE`.
 4. **Apply.** Run `apply <id>...` with the same `--root` options as the scan.
    Pass review IDs the user named with `--reviewed <id>`. Report each outcome
    (`deleted`, `refused`, `failed`) and the headroom change.
-   - A `refused` item no longer qualified, and a `failed` item hit an error;
-     neither was deleted. Do not work around either with other commands.
+   - A `refused` item no longer qualified and was not touched.
+   - A `failed` item hit an error and may be partly removed; for example, some
+     linked worktrees may already be gone.
+   - Report the reason and do not work around either outcome with other
+     commands.
 5. **Judgment items.** Explain what each one is, using its evidence. Remove one
    only when the user explicitly asks for that specific item. Then follow
    `evidence.hint`, the tool's own command or Finder, and confirm the exact
