@@ -96,13 +96,24 @@ conversation.
 | Detector | Class | Selection | Removal |
 | --- | --- | --- | --- |
 | `rust-target` | routine | `target/` next to a `Cargo.toml` under project roots, idle 14 days. The search goes at most 4 levels deep and skips hidden directories, `node_modules`, and `target`. A Cargo marker is required: a `CACHEDIR.TAG` with the Cargo signature, or a `<profile>/.fingerprint` directory (some front ends, such as maturin, omit the tag) | remove directory |
-| `docker-build-cache` | routine | build cache older than 7 days | `docker builder prune --force --filter until=168h`, evaluated at apply |
-| `docker-dangling-images` | routine | dangling images | `docker image prune --force` |
-| `docker-unused-images` | review | tagged images used by no container | `docker rmi <image-id>` |
+| `docker` (build cache) | routine | build cache records last used more than 7 days ago, excluding shared and in-use records | `docker builder prune --force --filter until=168h`, evaluated at apply |
+| `docker` (dangling images) | routine | dangling images used by no container | `docker image prune --force` |
+| `docker` (unused images) | review | tagged images used by no container, including stopped containers; one item per image | `docker image rm <ref>` for each tag |
+| `docker` (volumes) | judgment | all volumes as one item; the largest are listed in evidence | none |
 | `npm-cache`, `pnpm-store`, `uv-cache`, `go-build-cache`, `go-mod-cache` | routine | cache present | the tool's own command: `npm cache clean --force`, `pnpm store prune`, `uv cache prune`, `go clean -cache`, `go clean -modcache` |
 | `agent-scratch` | review | Claude Code session temp dirs (`/private/tmp/claude-<uid>/<project>/<session>`) idle 7 days. Codex locations are confirmed during implementation | remove directory |
 | `temp-clones` | review | git work trees under temp roots idle 7 days | linked worktrees: `git worktree remove`; others: remove directory |
-| `docker-volumes`, `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
+| `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
+
+The `docker` detector uses the docker CLI, so it works with any runtime: Colima,
+Docker Desktop, or OrbStack. It reads one `docker system df -v` snapshot. The CLI
+is found through `$TIDYUP_DOCKER`, then `PATH`, then the Homebrew and Docker
+Desktop locations. An invalid `$TIDYUP_DOCKER` is an error.
+
+- **No Docker installed:** the detector is silently absent.
+- **Daemon unreachable:** reported under `skipped`.
+- **Before removing an image:** `apply` confirms that its tags are unchanged and
+  that no container uses it.
 
 Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.
@@ -119,7 +130,10 @@ tidyup does not infer that a session has ended.
 
 ## Item IDs and `apply`
 
-IDs are `<detector>:<short hash of realpath>`. Docker items use the image ID.
+IDs are `<detector>:<short hash>`. For filesystem items the hash covers the
+realpath. For Docker items it covers the daemon ID and the item kind, plus the
+image ID and its tags for images. An ID therefore never applies to another
+daemon, and approving an image never extends to tags added after the scan.
 Each detector separates cheap *discovery* of candidate locations from the
 *evaluation* of whether a candidate qualifies now. `apply` then:
 
@@ -155,7 +169,8 @@ object:
       "id": "…",
       "class": "routine|review|judgment",
       "detector": "…",
-      "path": "…",
+      "path": "… (filesystem items)",
+      "label": "… (other items, e.g. Docker)",
       "estimated_bytes": 0,
       "evidence": {}
     }
