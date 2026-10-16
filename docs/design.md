@@ -175,8 +175,11 @@ ones nested inside another repository. They are found with NUL-framed `find`
 output, so a name containing a newline cannot be misread as another path.
 
 Git decides which work trees are linked worktrees: those whose git dir differs
-from the repository's common dir. A submodule's `.git` file points into its
-superproject, so a submodule is not treated as a linked worktree. For each git
+from the repository's common dir. Each directory is queried separately, so paths
+containing newlines compare correctly. A submodule's `.git` file points into its
+superproject, so a submodule is not treated as a linked worktree. A `.git` file
+that git cannot classify stops the removal, because it might be a linked
+worktree whose changes git would otherwise protect. For each git
 work tree inside the item, the evidence lists:
 
 - changed and untracked entries, and ignored entries;

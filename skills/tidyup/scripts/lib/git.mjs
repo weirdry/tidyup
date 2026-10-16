@@ -64,13 +64,14 @@ export async function findWorkTrees(dir) {
 // 'linked' for a linked worktree (its git dir differs from the repository's common
 // dir), 'own' for a repository with its own git dir (a clone, or a submodule whose
 // .git file points into the superproject), or null when git cannot tell.
+// Each directory is queried separately and only the trailing newline is removed,
+// so paths containing newlines compare correctly.
 async function worktreeKind(bin, path, env) {
+  const dirOf = async (flag) =>
+    (await runTool(bin, [...SAFE, '-C', path, 'rev-parse', '--path-format=absolute', flag], gitEnv(env))).replace(/\n$/, '');
   try {
-    const [gitDir, commonDir] = (await runTool(
-      bin,
-      [...SAFE, '-C', path, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
-      gitEnv(env),
-    )).trim().split('\n');
+    const gitDir = await dirOf('--git-dir');
+    const commonDir = await dirOf('--git-common-dir');
     if (!gitDir || !commonDir) return null;
     return gitDir === commonDir ? 'own' : 'linked';
   } catch {
@@ -150,8 +151,10 @@ export function summarizeFacts(facts) {
 
 // Removes every linked worktree inside `dir` (deepest first) through git, so their
 // repositories keep no stale entries. Without --force, git refuses a worktree
-// with changes or untracked files, which stops the whole removal. Submodules and
-// unreadable .git files are not linked worktrees; they go with the directory.
+// with changes or untracked files, which stops the whole removal. Repositories
+// with their own git dir (clones, submodules) go with the directory. A .git file
+// that git cannot classify stops the removal: it might be a linked worktree whose
+// changes git would otherwise have protected.
 export async function removeLinkedWorktrees(dir, env) {
   const candidates = (await findWorkTrees(dir)).filter((tree) => tree.gitFile);
   if (candidates.length === 0) return;
@@ -159,7 +162,9 @@ export async function removeLinkedWorktrees(dir, env) {
   if (!bin) throw new Error('git not found; cannot remove linked worktrees');
   candidates.sort((a, b) => b.path.length - a.path.length);
   for (const tree of candidates) {
-    if ((await worktreeKind(bin, tree.path, env)) !== 'linked') continue;
+    const kind = await worktreeKind(bin, tree.path, env);
+    if (kind === 'own') continue;
+    if (kind === null) throw new Error(`cannot tell whether ${tree.path} is a linked worktree; check and remove it manually`);
     await runTool(bin, [...SAFE, '-C', tree.path, 'worktree', 'remove', tree.path], gitEnv(env));
   }
 }
