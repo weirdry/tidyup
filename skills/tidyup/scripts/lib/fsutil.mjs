@@ -3,7 +3,7 @@
 // names starting with '-' are never parsed as options.
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, sep } from 'node:path';
 
 const TOOL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -51,6 +51,17 @@ export async function modifiedSince(path, since) {
 // True when `child` is strictly inside `parent`; both must already be real paths.
 export function isInside(child, parent) {
   return child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
+}
+
+// Why `path` must not be removed now, or null: it must exist, not be a symlink,
+// and resolve inside one of `allowedRoots` (real paths).
+export async function pathRefusal(path, allowedRoots) {
+  const stats = await lstat(path).catch(() => null);
+  if (!stats) return 'path no longer exists';
+  if (stats.isSymbolicLink()) return 'path is a symlink';
+  const real = await realpathOrNull(path);
+  if (!real || !allowedRoots.some((root) => isInside(real, root))) return 'path is outside the detector roots';
+  return null;
 }
 
 export async function realpathOrNull(path) {
