@@ -8,52 +8,21 @@
 // IDs also include the tags, so approval never extends to tags added after the scan.
 // Each operation pins the docker context it started with (unless DOCKER_HOST
 // already pins the endpoint), so a `docker context use` elsewhere cannot redirect it.
-import { execFile } from 'node:child_process';
-import { access, constants } from 'node:fs/promises';
-import { delimiter, join } from 'node:path';
-
 import { itemId } from '../fsutil.mjs';
+import { resolveTool, runTool } from '../tools.mjs';
 
 const NAME = 'docker';
 export const BUILD_CACHE_IDLE_DAYS = 7;
-const TIMEOUT_MS = 2 * 60 * 1000;
-const KNOWN_LOCATIONS = [
-  '/opt/homebrew/bin/docker',
-  '/usr/local/bin/docker',
-  '/Applications/Docker.app/Contents/Resources/bin/docker',
-];
 
-async function executable(path) {
-  try {
-    await access(path, constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// The docker CLI to use, or null when Docker is not installed. GUI apps and
-// scheduled tasks often lack Homebrew on PATH, so known locations are checked too.
-export async function resolveDocker(env) {
-  if (env.TIDYUP_DOCKER) {
-    if (await executable(env.TIDYUP_DOCKER)) return env.TIDYUP_DOCKER;
-    throw new Error(`TIDYUP_DOCKER=${env.TIDYUP_DOCKER} is not executable`);
-  }
-  const onPath = (env.PATH ?? '').split(delimiter).filter(Boolean).map((dir) => join(dir, 'docker'));
-  for (const candidate of [...onPath, ...KNOWN_LOCATIONS]) {
-    if (await executable(candidate)) return candidate;
-  }
-  return null;
-}
-
-function run(bin, args, env) {
-  return new Promise((resolve, reject) => {
-    execFile(bin, args, { env, timeout: TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(`docker ${args.join(' ')} failed: ${stderr.trim().split('\n')[0] || error.message}`));
-      else resolve(stdout);
-    });
+// The docker CLI, or null when Docker is not installed. TIDYUP_DOCKER overrides.
+export function resolveDocker(env) {
+  return resolveTool('docker', env, {
+    override: 'TIDYUP_DOCKER',
+    locations: ['/Applications/Docker.app/Contents/Resources/bin'],
   });
 }
+
+const run = (bin, args, env) => runTool(bin, args, env);
 
 // The docker endpoint for this operation, resolved once and cached on the context:
 // `call(args)` runs the CLI pinned to it. Null when Docker is not installed.
