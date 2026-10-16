@@ -129,7 +129,10 @@ export function itemsFromUsage(usage, tags, daemonId, now) {
       kind: 'image',
       label: `Docker image ${refs.join(', ')}`,
       estimated_bytes: parseSize(row.UniqueSize),
-      evidence: { image_id: imageId, refs, daemon_id: daemonId, created: row.CreatedAt, used_by_containers: 0 },
+      evidence: {
+        image_id: imageId, refs, daemon_id: daemonId, created: row.CreatedAt, used_by_containers: 0,
+        summary: `tags ${refs.join(', ')}; created ${row.CreatedAt}; used by no container`,
+      },
     });
   }
   items.push(...imageItems.sort((a, b) => (b.estimated_bytes ?? 0) - (a.estimated_bytes ?? 0)));

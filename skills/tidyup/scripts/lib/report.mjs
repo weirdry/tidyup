@@ -31,6 +31,12 @@ export function renderScan(report, home) {
       rows.push([item.id ?? '-', item.class, formatBytes(item.estimated_bytes), describe(item, home)]);
     }
     lines.push(table(rows), '');
+    const reviewed = report.items.filter((item) => item.class === 'review' && item.evidence?.summary);
+    if (reviewed.length > 0) {
+      lines.push('Review evidence (delete only IDs the user names after reading this):');
+      for (const item of reviewed) lines.push(`  ${item.id}  ${item.evidence.summary}`);
+      lines.push('');
+    }
     const routine = report.items.filter((item) => item.class === 'routine');
     const total = routine.reduce((sum, item) => sum + (item.estimated_bytes ?? 0), 0);
     lines.push(
