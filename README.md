@@ -7,10 +7,9 @@ quietly fill a developer's disk. tidyup measures free space, explains which item
 are safe to rebuild and why, and deletes only the items you select. Claude Code,
 Codex, and scheduled agent tasks use the same script and instructions.
 
-> **Status: under development.** No release exists yet. `scan` and `apply` work
-> for Rust build output, Docker, package caches, temp clones, and agent scratch; the remaining v1 work is tracked in
-> [#2](https://github.com/weirdry/tidyup/issues/2). The accepted v1 behavior is
-> described in [docs/design.md](docs/design.md).
+> **Status: pre-release.** The v1 detectors are complete on `dev`. The first
+> release is being prepared in [#2](https://github.com/weirdry/tidyup/issues/2).
+> The behavior is specified in [docs/design.md](docs/design.md).
 
 ## How it works
 
@@ -23,8 +22,9 @@ Codex, and scheduled agent tasks use the same script and instructions.
   - **review** items may hold unique work: temp clones, agent session scratch,
     and unused tagged images. They are deleted only after you see the evidence
     and name them.
-  - **judgment** items are listed with their size only and are never deleted:
-    Docker volumes, model caches, and leftover app data.
+  - **judgment** items are listed with their size, evidence, and a removal hint,
+    and are never deleted: Docker volumes, the Hugging Face model cache,
+    leftover data of uninstalled apps, and Homebrew cleanup.
 - **`apply <id>…` deletes only what you selected.** It re-checks each item first
   and reports one outcome per item.
 - **Scheduled callers can run it.** `scan --json` is stateless and returns the
@@ -42,6 +42,26 @@ tidyup apply <id> [<id>...] # delete selected candidates after re-checking them
 
 `tidyup` here means the skill's `scripts/tidyup` launcher. Agents run it as the
 skill describes.
+
+## Scheduled checks
+
+`scan --json` is stateless, and its exit code is the headroom level, so any
+scheduler can run it. Examples are a ChatGPT dot, a Codex scheduled task, cron,
+and launchd. The caller remembers the previous result and decides when to speak
+up. Scheduled runs must never call `apply`.
+
+An example prompt for a scheduled agent:
+
+```text
+Every weekday at 10:00, run on my Mac: <skill-dir>/scripts/tidyup scan --json
+Never run apply. Compare the result with your notes from the previous run,
+matching host, level, fingerprint, and skipped. Message me only when:
+- the level changed;
+- the level is recommend and it is Monday;
+- the level is urgent (every day).
+Include headroom, the largest routine items, review items with their evidence
+summaries, and anything under skipped.
+```
 
 ## Requirements
 

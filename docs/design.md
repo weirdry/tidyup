@@ -103,7 +103,9 @@ conversation.
 | `caches` (npm, pnpm, uv, Go build, Go modules) | routine | a cache directory reported by the tool exists | the tool's own command: `npm cache clean --force`, `pnpm store prune`, `uv cache clean`, `go clean -cache`, `go clean -modcache` |
 | `agent-scratch` | review | Claude Code session temp dirs (`/private/tmp/claude-<uid>/<project>/<session>`, also under `$TMPDIR`) idle 7 days, unless the session transcript was modified within 7 days | `git worktree remove` for linked worktrees inside, then remove the directory |
 | `temp-clones` | review | top-level entries of `/private/tmp`, `$TMPDIR`, and `~/.codex/worktrees` that contain a git work tree within 3 levels, idle 7 days; agent scratch roots are excluded | `git worktree remove` for linked worktrees inside, then remove the directory |
-| `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
+| `model-caches` | judgment | the Hugging Face hub cache (`HF_HUB_CACHE`, `HF_HOME/hub`, or `~/.cache/huggingface/hub`), as one item listing the largest models | none; hint: `huggingface-cli delete-cache` |
+| `app-containers` | judgment | non-Apple `~/Library/Containers` entries of apps Spotlight does not find installed (at least 100 MiB), and UUID-named containers whose app cannot be identified (at least 1 GiB) | none; hint: move to the Trash in Finder |
+| `homebrew` | judgment | what `brew cleanup --dry-run` would free | none; hint: run `brew cleanup` yourself |
 
 The `docker` detector uses the docker CLI, so it works with any runtime: Colima,
 Docker Desktop, or OrbStack.
@@ -163,6 +165,21 @@ install locations: Homebrew, `~/.local/bin`, mise shims, and tool-specific
 directories. They run with the running Node's directory first on `PATH`, so
 Node-based CLIs work from GUI apps and scheduled tasks. A tool that is not
 installed is silently absent.
+
+Judgment detectors never offer IDs. Each item carries `evidence.summary` and
+`evidence.hint`, which the scan prints under "Judgment items".
+
+- **app-containers:** relies on one Spotlight query for the bundle identifiers
+  of installed apps. An identifier counts as installed when an app's identifier
+  equals it or is its parent, as with extensions and helpers. If Spotlight does
+  not answer, the detector is skipped with that reason.
+- **UUID-named containers:** their metadata is protected by macOS, so their app
+  cannot be identified.
+- **Size floors:** they keep hundreds of small containers out of the table.
+
+Discovery failures are reported, never treated as absence. When there are more
+than three, they are summarized in one `skipped` entry, because macOS keeps many
+per-service `TemporaryItems` folders private.
 
 Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.
@@ -299,7 +316,7 @@ Callers must read stdout even for exit codes 10 and 20.
 ## Deferred
 
 - Homebrew cleanup through `apply`. `brew cleanup` also removes old installed
-  formula versions, which is outside package-cache scope.
+  formula versions, which is outside package-cache scope; it is a judgment item.
 - A configuration file. CLI options and auto-discovery come first; add an XDG
   path such as `~/.config/tidyup/` only when a real need appears.
 - Linux support.

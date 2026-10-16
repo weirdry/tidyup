@@ -37,8 +37,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Claude Code session scratch directories. Both are review items, and each
   carries git evidence: changed files, commits only here, stashes, and linked
   worktrees.
-- Every review item carries a one-line evidence summary, shown under the scan
-  table.
+- Judgment detectors report items that tidyup never deletes, each with a size,
+  evidence, and a removal hint:
+  - `model-caches`: the Hugging Face hub cache, with its largest models;
+  - `app-containers`: leftover data of apps that are no longer installed;
+  - `homebrew`: what `brew cleanup` would free.
+- Every review and judgment item carries a one-line evidence summary, shown
+  under the scan table.
+- The skill describes the complete interactive and scheduled workflows, and the
+  README includes a scheduled-check example.
 - `apply` deletes the selected items. For each item it re-checks the path and
   re-evaluates eligibility immediately before removing it, and it reports one
   outcome per item.
