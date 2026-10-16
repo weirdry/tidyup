@@ -134,7 +134,12 @@ function workDirDetector({ name, roots, candidatesIn, finalCheck = async () => (
       if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('no longer a real directory');
       await removeLinkedWorktrees(item.path, context.env);
       // git removed the item itself when the item root was a linked worktree.
-      if (!(await lstat(item.path).catch(() => null))) return;
+      try {
+        await lstat(item.path);
+      } catch (error) {
+        if (error.code === 'ENOENT') return;
+        throw new Error(`cannot inspect ${item.path} after removing worktrees: ${error.code ?? error.message}`);
+      }
       // Worktree removal can take a while; re-check the path right before deleting.
       const refusal = await pathRefusal(item.path, await roots(context));
       if (refusal) throw new Error(refusal);
