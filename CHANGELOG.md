@@ -32,6 +32,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - The pnpm estimate is unknown, because prune removes only unreferenced
     packages.
   - A uv cache under `link-mode = symlink` becomes a review item.
+- The `temp-clones` and `agent-scratch` detectors report directories that may
+  hold unique work. These are temp entries containing git work trees, and
+  Claude Code session scratch directories. Both are review items, and each
+  carries git evidence: changed files, commits only here, stashes, and linked
+  worktrees.
+- Every review item carries a one-line evidence summary, shown under the scan
+  table.
 - `apply` deletes the selected items. For each item it re-checks the path and
   re-evaluates eligibility immediately before removing it, and it reports one
   outcome per item.

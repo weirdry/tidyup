@@ -101,8 +101,8 @@ conversation.
 | `docker` (unused images) | review | tagged images used by no container, including stopped containers; one item per image | `docker image rm <ref>` for each tag |
 | `docker` (volumes) | judgment | all volumes as one item; the largest are listed in evidence | none |
 | `caches` (npm, pnpm, uv, Go build, Go modules) | routine | a cache directory reported by the tool exists | the tool's own command: `npm cache clean --force`, `pnpm store prune`, `uv cache clean`, `go clean -cache`, `go clean -modcache` |
-| `agent-scratch` | review | Claude Code session temp dirs (`/private/tmp/claude-<uid>/<project>/<session>`) idle 7 days. Codex locations are confirmed during implementation | remove directory |
-| `temp-clones` | review | git work trees under temp roots idle 7 days | linked worktrees: `git worktree remove`; others: remove directory |
+| `agent-scratch` | review | Claude Code session temp dirs (`/private/tmp/claude-<uid>/<project>/<session>`, also under `$TMPDIR`) idle 7 days, unless the session transcript was modified within 7 days | `git worktree remove` for linked worktrees inside, then remove the directory |
+| `temp-clones` | review | top-level entries of `/private/tmp`, `$TMPDIR`, and `~/.codex/worktrees` that contain a git work tree within 3 levels, idle 7 days; agent scratch roots are excluded | `git worktree remove` for linked worktrees inside, then remove the directory |
 | `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
 
 The `docker` detector uses the docker CLI, so it works with any runtime: Colima,
@@ -168,14 +168,39 @@ Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.
 Idle means no file in the subtree was modified within the window.
 
-Review items carry evidence:
+Review items carry evidence, plus a one-line `evidence.summary` shown under the
+scan table. For each git work tree inside the item, the evidence lists:
 
-- git facts: dirty or ignored files, commits not reachable from a
-  remote-tracking ref, stash, and linked-worktree status;
-- the newest mtime in the subtree.
+- changed and untracked entries, and ignored entries;
+- `only_here`: commits that removal would lose.
+  - For a standalone clone, these are commits on HEAD, branches, or tags that
+    no remote-tracking ref has.
+  - For a linked worktree, they are commits on its HEAD that no branch, tag,
+    or remote has. Its branches live in the shared repository and survive.
+- stashes. A linked worktree shares its stashes with its repository, so they
+  are not counted for it.
+- whether it is a linked worktree;
+- an error when git cannot read it. Unreadable trees are named in the summary,
+  never counted as zeros.
 
-Session ownership is shown as `unknown` unless specific evidence establishes it.
-tidyup does not infer that a session has ended.
+Agent scratch items also record the session transcript
+(`~/.claude/projects/<project>/<session>.jsonl`) when one exists. A transcript
+modified within the idle window makes the session ineligible. Otherwise session
+ownership is shown as `unknown`; tidyup does not infer that a session has ended.
+
+Safety rules for these directories:
+
+- **Ownership:** only directories owned by the current user are considered.
+  `/tmp` is writable by every user, and running git inside another user's
+  repository could execute that repository's configuration.
+- **No redirection:** git runs with inherited `GIT_*` variables removed, so
+  `GIT_DIR` or `GIT_WORK_TREE` cannot point the evidence elsewhere.
+- **No index refresh:** evidence commands use `--no-optional-locks`, so a scan
+  does not refresh the index and make an idle tree look recently modified.
+- **Removal order:** linked worktrees inside the item are removed first, with
+  `git worktree remove` and without `--force`, so a worktree with changes stops
+  the removal. Read-only directories, such as Go module caches, are made
+  owner-writable just before deletion.
 
 ## Item IDs and `apply`
 
