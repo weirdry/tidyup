@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-17
+
+First release: tidyup measures disk headroom on macOS, lists cleanup candidates
+with evidence in three classes (routine, review, judgment), and deletes only the
+items a user selects.
+
 ### Added
 
 - Repository foundation: contribution workflow, agent rules, v1 design, CI, and
@@ -15,6 +21,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (≤ 20% free) or `urgent` (≤ 10% free);
   - prints a table, or JSON with `--json`;
   - returns the level as its exit code.
+- `apply` deletes the selected items. For each item it re-checks the path and
+  re-evaluates eligibility immediately before removing it, and it reports one
+  outcome per item.
 - The `rust-target` detector finds idle Cargo `target/` directories under the
   project roots.
 - The `docker` detector works through the docker CLI with any runtime:
@@ -46,6 +55,6 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   under the scan table.
 - The skill describes the complete interactive and scheduled workflows, and the
   README includes a scheduled-check example.
-- `apply` deletes the selected items. For each item it re-checks the path and
-  re-evaluates eligibility immediately before removing it, and it reports one
-  outcome per item.
+
+[Unreleased]: https://github.com/weirdry/tidyup/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/weirdry/tidyup/releases/tag/v0.1.0

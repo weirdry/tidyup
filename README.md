@@ -7,9 +7,8 @@ quietly fill a developer's disk. tidyup measures free space, explains which item
 are safe to rebuild and why, and deletes only the items you select. Claude Code,
 Codex, and scheduled agent tasks use the same script and instructions.
 
-> **Status: pre-release.** The v1 detectors are complete on `dev`. The first
-> release is being prepared in [#2](https://github.com/weirdry/tidyup/issues/2).
-> The behavior is specified in [docs/design.md](docs/design.md).
+> **Status: v0.1.0.** The behavior is specified in [docs/design.md](docs/design.md),
+> and changes are listed in the [changelog](CHANGELOG.md).
 
 ## How it works
 
@@ -71,19 +70,21 @@ summaries, and anything under skipped.
 
 ## Installation
 
-There is no release yet. For development, link a checkout into the skill
-directories:
+Install the released version for Codex and Claude Code with the
+[Skills CLI](https://github.com/vercel-labs/skills):
+
+```sh
+npx skills@1.7.2 add 'weirdry/tidyup#v0.1.0' -g -a codex claude-code
+```
+
+This installs the skill into `~/.agents/skills/tidyup`, which Codex reads, and
+links it from `~/.claude/skills/tidyup` for Claude Code.
+
+For development, link a checkout instead:
 
 ```sh
 ln -s /absolute/path/to/tidyup/skills/tidyup ~/.agents/skills/tidyup
 ln -s /absolute/path/to/tidyup/skills/tidyup ~/.claude/skills/tidyup
-```
-
-After the first release, install a tagged version with the
-[Skills CLI](https://github.com/vercel-labs/skills):
-
-```sh
-npx skills add 'weirdry/tidyup#vX.Y.Z' -g -a codex claude-code
 ```
 
 ## Contributing
