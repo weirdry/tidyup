@@ -173,7 +173,7 @@ describe('docker through the CLI', () => {
   });
 
   test('with DOCKER_HOST set, the environment pins the endpoint and no context is passed', async () => {
-    await runMain(main, ['scan', '--json'], { home, percent: 5, docker, env: { HOME: home, TIDYUP_DOCKER: docker.bin, DOCKER_HOST: 'unix:///fake.sock' } });
+    await runMain(main, ['scan', '--json'], { home, percent: 5, docker, env: { DOCKER_HOST: 'unix:///fake.sock' } });
     assert.ok(docker.calls().every((args) => args[0] !== '--context'));
   });
 
