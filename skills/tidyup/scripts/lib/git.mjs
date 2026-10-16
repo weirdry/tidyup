@@ -42,22 +42,40 @@ export async function hasWorkTreeWithin(dir, maxDepth, errors) {
 }
 
 // Every git work tree anywhere under `dir`, nested ones included, without
-// following symlinks or descending into .git directories. `linked` is true when
-// `.git` is a file (a linked worktree or similar). Throws when part of the tree
-// cannot be read, because then a nested work tree could be missed.
+// following symlinks or descending into .git directories. Paths are NUL-framed,
+// so a name containing a newline cannot be misread as another path. Throws when
+// part of the tree cannot be read, because then a nested work tree could be missed.
+// Whether a tree is a linked worktree is decided by git (see worktreeKind).
 export async function findWorkTrees(dir) {
   const stdout = await new Promise((resolve, reject) => {
-    execFile('find', [dir, '-name', '.git', '-print', '-prune'], { maxBuffer: 16 * 1024 * 1024 }, (error, out, err) => {
+    execFile('find', [dir, '-name', '.git', '-print0', '-prune'], { maxBuffer: 16 * 1024 * 1024 }, (error, out, err) => {
       if (error) reject(new Error(`cannot search ${dir} for git work trees: ${err.trim().split('\n')[0] || error.message}`));
       else resolve(out);
     });
   });
   const trees = [];
-  for (const gitPath of stdout.split('\n').filter(Boolean)) {
+  for (const gitPath of stdout.split('\0').filter(Boolean)) {
     const stats = await lstat(gitPath).catch(() => null);
-    if (stats && (stats.isDirectory() || stats.isFile())) trees.push({ path: dirname(gitPath), linked: stats.isFile() });
+    if (stats && (stats.isDirectory() || stats.isFile())) trees.push({ path: dirname(gitPath), gitFile: stats.isFile() });
   }
   return trees.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+// 'linked' for a linked worktree (its git dir differs from the repository's common
+// dir), 'own' for a repository with its own git dir (a clone, or a submodule whose
+// .git file points into the superproject), or null when git cannot tell.
+async function worktreeKind(bin, path, env) {
+  try {
+    const [gitDir, commonDir] = (await runTool(
+      bin,
+      [...SAFE, '-C', path, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir'],
+      gitEnv(env),
+    )).trim().split('\n');
+    if (!gitDir || !commonDir) return null;
+    return gitDir === commonDir ? 'own' : 'linked';
+  } catch {
+    return null;
+  }
 }
 
 // Counts of changed (including untracked) and ignored entries in
@@ -85,9 +103,12 @@ export function countStatus(output) {
 //     `stashes` is null.
 export async function gitFacts(tree, env) {
   const bin = await resolveTool('git', env);
-  if (!bin) return { path: tree.path, linked: tree.linked, error: 'git not found' };
+  if (!bin) return { path: tree.path, linked: false, error: 'git not found' };
   const call = (args) => runTool(bin, ['--no-optional-locks', ...SAFE, '-C', tree.path, ...args], gitEnv(env));
   const count = async (args) => Number((await call(['rev-list', '--count', ...args])).trim());
+  const kind = await worktreeKind(bin, tree.path, env);
+  if (!kind) return { path: tree.path, linked: false, error: `git cannot read ${tree.path}: fatal: not a usable git work tree` };
+  tree = { ...tree, linked: kind === 'linked' };
   try {
     const { changed, ignored } = countStatus(
       await call(['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignored=matching']),
@@ -129,14 +150,16 @@ export function summarizeFacts(facts) {
 
 // Removes every linked worktree inside `dir` (deepest first) through git, so their
 // repositories keep no stale entries. Without --force, git refuses a worktree
-// with changes or untracked files, which stops the whole removal.
+// with changes or untracked files, which stops the whole removal. Submodules and
+// unreadable .git files are not linked worktrees; they go with the directory.
 export async function removeLinkedWorktrees(dir, env) {
-  const linked = (await findWorkTrees(dir)).filter((tree) => tree.linked);
-  if (linked.length === 0) return;
+  const candidates = (await findWorkTrees(dir)).filter((tree) => tree.gitFile);
+  if (candidates.length === 0) return;
   const bin = await resolveTool('git', env);
   if (!bin) throw new Error('git not found; cannot remove linked worktrees');
-  linked.sort((a, b) => b.path.length - a.path.length);
-  for (const tree of linked) {
+  candidates.sort((a, b) => b.path.length - a.path.length);
+  for (const tree of candidates) {
+    if ((await worktreeKind(bin, tree.path, env)) !== 'linked') continue;
     await runTool(bin, [...SAFE, '-C', tree.path, 'worktree', 'remove', tree.path], gitEnv(env));
   }
 }

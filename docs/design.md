@@ -171,8 +171,13 @@ Idle means no file in the subtree was modified within the window.
 Review items carry evidence, plus a one-line `evidence.summary` shown under the
 scan table. A candidate is picked when a git work tree exists within 3 levels.
 Evidence and removal then cover every work tree in the whole item, including
-ones nested inside another repository. For each git work tree inside the item,
-the evidence lists:
+ones nested inside another repository. They are found with NUL-framed `find`
+output, so a name containing a newline cannot be misread as another path.
+
+Git decides which work trees are linked worktrees: those whose git dir differs
+from the repository's common dir. A submodule's `.git` file points into its
+superproject, so a submodule is not treated as a linked worktree. For each git
+work tree inside the item, the evidence lists:
 
 - changed and untracked entries, and ignored entries;
 - `only_here`: commits that removal would lose.
@@ -212,6 +217,8 @@ Safety rules for these directories:
      deepest first with `git worktree remove` and without `--force`. A worktree
      with changes or untracked files stops the removal.
   2. If the item itself was a linked worktree, git has already removed it.
+     Only absence counts as removed; any other failure to inspect the path is
+     an error.
   3. Otherwise the path is checked again (containment, no symlink).
   4. Read-only directories, such as Go module caches, are made owner-writable,
      and the directory is deleted.

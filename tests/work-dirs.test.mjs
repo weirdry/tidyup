@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
 import { tempClones } from '../skills/tidyup/scripts/lib/detectors/work-dirs.mjs';
-import { countStatus } from '../skills/tidyup/scripts/lib/git.mjs';
+import { countStatus, findWorkTrees } from '../skills/tidyup/scripts/lib/git.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { age, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
 
@@ -245,14 +245,66 @@ describe('temp-clones and agent-scratch', () => {
     writeFiles(outside, { 'precious.txt': 'keep' });
     writeFiles(tmp, { 'task/wt/.git': 'gitdir: /nowhere\n', 'task/wt/file.txt': 'x' });
     writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
-/bin/rm -rf '${join(tmp, 'task/wt')}'
-/bin/mv '${join(tmp, 'task')}' '${join(home, 'moved-task')}'
-/bin/ln -s '${outside}' '${join(tmp, 'task')}'
+case "$*" in
+  *rev-parse*) echo /repo/.git/worktrees/wt; echo /repo/.git ;;
+  *"worktree remove"*)
+    /bin/rm -rf '${join(tmp, 'task/wt')}'
+    /bin/mv '${join(tmp, 'task')}' '${join(home, 'moved-task')}'
+    /bin/ln -s '${outside}' '${join(tmp, 'task')}' ;;
+esac
 `, { mode: 0o755 });
     const item = { id: 'temp-clones:x', class: 'review', detector: 'temp-clones', path: join(tmp, 'task') };
     const context = { env: { HOME: home, PATH: fakeDir }, home, now: new Date(), paths: paths() };
     await assert.rejects(tempClones.remove(item, context), /symlink/);
     assert.equal(existsSync(join(outside, 'precious.txt')), true);
+  });
+
+  test('a path containing a newline cannot be read as a work tree outside the item', async () => {
+    const mainRepo = join(home, 'repos/main');
+    repo(mainRepo);
+    const outsideWt = join(home, 'outside/wt');
+    git(mainRepo, 'worktree', 'add', '-q', '--detach', outsideWt);
+    // Inside the item, mirror the outside path below a directory whose name ends in a newline.
+    const item = join(tmp, 'item');
+    writeFiles(join(item, 'x\n', outsideWt), { '.git': 'gitdir: /nowhere\n' });
+    const trees = await findWorkTrees(item);
+    assert.ok(trees.every((tree) => tree.path.startsWith(item + '/')), JSON.stringify(trees));
+  });
+
+  test('a submodule is not treated as a linked worktree', async () => {
+    const library = join(home, 'repos/library');
+    repo(library);
+    repo(join(tmp, 'app'));
+    git(join(tmp, 'app'), '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', library, 'lib');
+    git(join(tmp, 'app'), 'commit', '-q', '-m', 'add submodule');
+    age(tmp, 30);
+    const [item] = await scanItems();
+    const submodule = item.evidence.git.find((f) => f.path.endsWith('/lib'));
+    assert.equal(submodule.linked, false);
+    assert.equal(typeof submodule.stashes, 'number');
+    const result = JSON.parse((await run(['apply', '--reviewed', item.id, '--json'])).stdout);
+    assert.equal(result.outcomes[0].outcome, 'deleted', JSON.stringify(result.outcomes));
+  });
+
+  test('a failure to inspect the item after worktree removal is an error, not success', async () => {
+    const fakeDir = mkdtempSync(join(tmpdir(), 'tidyup-fake-git-'));
+    homes.push(fakeDir);
+    writeFiles(tmp, { 'task/wt/.git': 'gitdir: /nowhere\n' });
+    // rev-parse reports a linked worktree; worktree remove deletes it and locks the parent.
+    writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
+case "$*" in
+  *rev-parse*) echo /repo/.git/worktrees/wt; echo /repo/.git ;;
+  *"worktree remove"*) /bin/rm -rf '${join(tmp, 'task/wt')}'; /bin/chmod 000 '${tmp}' ;;
+esac
+`, { mode: 0o755 });
+    const item = { id: 'temp-clones:x', class: 'review', detector: 'temp-clones', path: join(tmp, 'task') };
+    const context = { env: { HOME: home, PATH: fakeDir }, home, now: new Date(), paths: paths() };
+    try {
+      await assert.rejects(tempClones.remove(item, context), /cannot inspect .* after removing worktrees: EACCES/);
+    } finally {
+      chmodSync(tmp, 0o755);
+    }
+    assert.equal(existsSync(join(tmp, 'task')), true);
   });
 
   test('agent session directories are review items unless their transcript is recent', async () => {
