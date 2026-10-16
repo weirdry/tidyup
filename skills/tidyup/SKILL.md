@@ -8,10 +8,10 @@ description: "Measure and reclaim disk space on a macOS development machine. Use
 tidyup measures disk headroom and lists cleanup candidates with evidence. It
 deletes only the items the user selects.
 
-> **Status: v1 in progress.** Only Rust build output (`rust-target`) is
-> detected so far. For other space users (Docker, package caches, temp clones,
-> agent scratch), investigate manually. Show the user what you find, and delete
-> nothing without their explicit approval.
+> **Status: v1 in progress.** Rust build output (`rust-target`) and Docker
+> (`docker`) are detected so far. For other space users (package caches, temp
+> clones, agent scratch), investigate manually. Show the user what you find, and
+> delete nothing without their explicit approval.
 
 ## Running
 
@@ -38,6 +38,8 @@ for the Node path and pass it as `TIDYUP_NODE`.
    - `judgment` items are for the user alone to decide.
 3. **Ask.** Ask which IDs to delete. You may recommend routine items, but wait
    for the user to choose.
+   Review items, such as unused tagged Docker images, need the user to name
+   each ID after seeing its evidence. Pass those IDs with `--reviewed <id>`.
 4. **Apply.** Run `apply <id>...` with the same `--root` options as the scan.
    Report each outcome (`deleted`, `refused`, `failed`) and the headroom change.
    A `refused` item was not deleted because it no longer qualified. Do not work
