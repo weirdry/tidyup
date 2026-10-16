@@ -1,0 +1,45 @@
+#!/bin/sh
+# tidyup launcher: resolve Node.js 22+ and run tidyup.mjs with the given arguments.
+# Resolution order: $TIDYUP_NODE (must be valid when set), node on PATH, `mise which node`.
+# It never installs anything or sources shell profiles. Exit 1 on setup failure.
+set -eu
+
+min_major=22
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+
+fail() {
+  printf 'tidyup: %s\n' "$1" >&2
+  exit 1
+}
+
+# True when $1 is an executable that reports a Node.js major version >= min_major.
+usable() {
+  [ -n "$1" ] && [ -x "$1" ] || return 1
+  major=$("$1" -p 'process.versions.node.split(".")[0]' 2>/dev/null) || return 1
+  case $major in '' | *[!0-9]*) return 1 ;; esac
+  [ "$major" -ge "$min_major" ]
+}
+
+if [ -n "${TIDYUP_NODE:-}" ]; then
+  usable "$TIDYUP_NODE" || fail "TIDYUP_NODE=$TIDYUP_NODE is not a Node.js $min_major+ executable"
+  node_bin=$TIDYUP_NODE
+else
+  node_bin=$(command -v node 2>/dev/null || true)
+  if ! usable "$node_bin"; then
+    node_bin=
+    mise_bin=$(command -v mise 2>/dev/null || true)
+    # GUI apps and scheduled tasks may lack these on PATH: the mise installer and Homebrew locations.
+    if [ -z "$mise_bin" ]; then
+      for path in "$HOME/.local/bin/mise" /opt/homebrew/bin/mise /usr/local/bin/mise; do
+        if [ -x "$path" ]; then mise_bin=$path; break; fi
+      done
+    fi
+    if [ -n "$mise_bin" ]; then
+      candidate=$(cd "$HOME" && "$mise_bin" which node 2>/dev/null || true)
+      if usable "$candidate"; then node_bin=$candidate; fi
+    fi
+  fi
+  [ -n "$node_bin" ] || fail "Node.js $min_major+ not found; set TIDYUP_NODE to its absolute path"
+fi
+
+exec "$node_bin" "$script_dir/tidyup.mjs" "$@"
