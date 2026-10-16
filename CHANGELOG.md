@@ -27,8 +27,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   count is unknown are reported as skipped.
 - The `caches` detector covers npm, pnpm, uv, and the Go build and module
   caches. It locates each cache by asking the tool from the home directory, and
-  cleans it only with the tool's own command. The pnpm estimate is unknown,
-  because prune removes only unreferenced packages.
+  cleans it only with the tool's own command, aimed at the located cache.
+  - Go cleaning ignores inherited `GOFLAGS` and go env settings.
+  - The pnpm estimate is unknown, because prune removes only unreferenced
+    packages.
+  - A uv cache under `link-mode = symlink` becomes a review item.
 - `apply` deletes the selected items. For each item it re-checks the path and
   re-evaluates eligibility immediately before removing it, and it reports one
   outcome per item.
