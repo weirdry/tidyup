@@ -1,0 +1,17 @@
+{
+  "name": "tidyup",
+  "private": true,
+  "description": "An agent skill that keeps disk headroom on macOS development machines.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weirdry/tidyup.git"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
