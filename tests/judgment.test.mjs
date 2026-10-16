@@ -1,0 +1,111 @@
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+import { after, beforeEach, describe, test } from 'node:test';
+
+import {
+  LEFTOVER_MIN_BYTES, UNIDENTIFIED_MIN_BYTES, huggingFaceHub, isInstalled, leftoverContainers, parseBrewFree,
+} from '../skills/tidyup/scripts/lib/detectors/judgment.mjs';
+import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
+import { fakeTools, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
+
+const GiB = 1024 ** 3;
+
+describe('judgment helpers', () => {
+  test('brew dry-run output is parsed with binary multiples', () => {
+    assert.equal(parseBrewFree('==> This operation would free approximately 1.5GB of disk space.'), Math.round(1.5 * GiB));
+    assert.equal(parseBrewFree('==> This operation would free approximately 34.6MB of disk space.'), Math.round(34.6 * 1024 ** 2));
+    assert.equal(parseBrewFree('nothing to clean'), null);
+  });
+
+  test('the Hugging Face hub location follows HF_HUB_CACHE, HF_HOME, then XDG', () => {
+    assert.equal(huggingFaceHub({ HF_HUB_CACHE: '/hub' }, '/home'), '/hub');
+    assert.equal(huggingFaceHub({ HF_HOME: '/hf' }, '/home'), '/hf/hub');
+    assert.equal(huggingFaceHub({ XDG_CACHE_HOME: '/xdg' }, '/home'), '/xdg/huggingface/hub');
+    assert.equal(huggingFaceHub({}, '/home'), '/home/.cache/huggingface/hub');
+  });
+
+  test('an app counts as installed for its own and its extensions\' containers', () => {
+    const installed = new Set(['ai.perplexity.mac', 'com.aone.keka']);
+    assert.equal(isInstalled('ai.perplexity.mac', installed), true);
+    assert.equal(isInstalled('ai.perplexity.mac.askwidget', installed), true);
+    assert.equal(isInstalled('com.aone.Keka-Sparkle.Downloader', installed), true);
+    assert.equal(isInstalled('com.kurogame.game', installed), false);
+  });
+
+  test('only large leftovers of uninstalled apps and very large unidentified containers are listed', () => {
+    const sizes = new Map([
+      ['/c/com.apple.Safari', 50 * GiB],
+      ['/c/com.installed.app', 5 * GiB],
+      ['/c/com.removed.small', LEFTOVER_MIN_BYTES - 1],
+      ['/c/com.removed.game', 40 * GiB],
+      ['/c/A529EAD6-8DD3-413D-94AA-610F11F3875F', 17 * GiB],
+      ['/c/2AFCA86A-5528-4BFA-A1EA-C275853195FE', UNIDENTIFIED_MIN_BYTES - 1],
+    ]);
+    const found = leftoverContainers(sizes, new Set(['com.installed.app']));
+    assert.deepEqual(found.map((entry) => [entry.id, entry.identified]), [
+      ['com.removed.game', true],
+      ['A529EAD6-8DD3-413D-94AA-610F11F3875F', false],
+    ]);
+  });
+});
+
+describe('judgment detectors through the CLI', () => {
+  let home;
+  let tools;
+  const cleanup = [];
+  beforeEach(() => {
+    home = makeHome();
+    tools = fakeTools();
+    cleanup.push(home, tools.dir);
+  });
+  after(() => cleanup.forEach(removeTree));
+
+  const scan = async (extra = {}) => JSON.parse((await runMain(main, ['scan', '--json'], { home, percent: 5, tools, ...extra })).stdout);
+  const judgment = (report, detector) => report.items.filter((item) => item.detector === detector);
+
+  test('the Hugging Face cache is one judgment item listing its largest models', async () => {
+    writeFiles(home, {
+      '.cache/huggingface/hub/models--org--big/blobs/a': 'x'.repeat(64 * 1024),
+      '.cache/huggingface/hub/models--org--small/blobs/a': 'x'.repeat(4096),
+      '.cache/huggingface/hub/.locks/x': '',
+    });
+    const [item] = judgment(await scan(), 'model-caches');
+    assert.equal(item.class, 'judgment');
+    assert.equal(item.id, undefined);
+    assert.deepEqual(item.evidence.largest.map((m) => m.name), ['org/big', 'org/small']);
+    assert.match(item.label, /2 models/);
+
+    const human = await runMain(main, ['scan'], { home, percent: 5, tools });
+    assert.match(human.stdout, /Judgment items .*\n.*Hugging Face model cache .*: largest: org\/big/);
+  });
+
+  test('HF_HUB_CACHE moves the model cache', async () => {
+    writeFiles(home, { 'models/hub/models--org--m/blobs/a': 'x' });
+    const items = judgment(await scan({ env: { HF_HUB_CACHE: join(home, 'models/hub') } }), 'model-caches');
+    assert.equal(items.length, 1);
+  });
+
+  test('brew cleanup is a judgment item sized by its dry run, absent when nothing would be freed', async () => {
+    tools.update({ brewDryRun: 'Would remove: /x (1 file, 1KB)\n==> This operation would free approximately 1.5GB of disk space.\n' });
+    const [item] = judgment(await scan(), 'homebrew');
+    assert.equal(item.estimated_bytes, Math.round(1.5 * GiB));
+    assert.match(item.evidence.summary, /old installed formula versions/);
+
+    tools.update({ brewDryRun: '' });
+    assert.deepEqual(judgment(await scan(), 'homebrew'), []);
+  });
+
+  test('app containers are skipped with a reason when Spotlight cannot identify apps', async () => {
+    writeFiles(home, { 'Library/Containers/com.removed.app/Data/file': 'x' });
+    tools.update({ apps: [] });
+    const report = await scan();
+    assert.deepEqual(judgment(report, 'app-containers'), []);
+    assert.ok(report.skipped.some((entry) => /Spotlight is unavailable/.test(entry.reason)));
+  });
+
+  test('judgment items cannot be applied', async () => {
+    const result = await runMain(main, ['apply', 'model-caches:0123456789', '--json'], { home, percent: 5, tools });
+    assert.equal(result.code, EXIT.error);
+    assert.equal(JSON.parse(result.stdout).outcomes[0].outcome, 'refused');
+  });
+});

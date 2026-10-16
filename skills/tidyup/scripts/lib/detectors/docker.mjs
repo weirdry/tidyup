@@ -8,7 +8,7 @@
 // IDs also include the tags, so approval never extends to tags added after the scan.
 // Each operation pins the docker context it started with (unless DOCKER_HOST
 // already pins the endpoint), so a `docker context use` elsewhere cannot redirect it.
-import { itemId } from '../fsutil.mjs';
+import { formatBytes, itemId } from '../fsutil.mjs';
 import { resolveTool, runTool } from '../tools.mjs';
 
 const NAME = 'docker';
@@ -148,7 +148,11 @@ export function itemsFromUsage(usage, tags, daemonId, now) {
       kind: 'volumes',
       label: `Docker volumes (${volumes.length}; ${sized.filter((v) => v.containers === 0).length} unattached)`,
       estimated_bytes: sized.reduce((sum, volume) => sum + (volume.bytes ?? 0), 0),
-      evidence: { largest: sized.slice(0, 10) },
+      evidence: {
+        largest: sized.slice(0, 10),
+        hint: 'docker volume rm <name> for volumes you no longer need; a volume may hold databases or other unique data',
+        summary: `largest: ${sized.slice(0, 3).map((v) => `${v.name} (${formatBytes(v.bytes)}, ${v.containers === 0 ? 'unattached' : 'in use'})`).join(', ')}`,
+      },
     });
   }
   return { items, skipped };

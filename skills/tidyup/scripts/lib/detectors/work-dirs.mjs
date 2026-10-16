@@ -69,6 +69,13 @@ async function removeTree(path) {
   await rm(path, { recursive: true, force: true });
 }
 
+// Read failures during discovery, as `skipped` entries. Many at once (macOS keeps
+// per-service TemporaryItems folders private) are reported as one entry.
+export function discoveryFailures(name, errors, limit = 3) {
+  if (errors.length <= limit) return errors.map((reason) => ({ detector: name, reason }));
+  return [{ detector: name, reason: `${errors.length} directories could not be read, e.g. ${errors[0]}` }];
+}
+
 // `finalCheck(candidate, context, since)` runs last in evaluation and returns
 // `{ reason }` to make the candidate ineligible, or `{ evidence }` to add. It may
 // throw when it cannot decide.
@@ -101,7 +108,7 @@ function workDirDetector({ name, roots, candidatesIn, finalCheck = async () => (
           candidates.push({ id: itemId(name, path), class: 'review', detector: name, path });
         }
       }
-      return { candidates, skipped: errors.map((reason) => ({ detector: name, reason })) };
+      return { candidates, skipped: discoveryFailures(name, errors) };
     },
 
     evaluate,

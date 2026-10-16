@@ -6,14 +6,16 @@
 //   remove(item, context)    → deletes one item (apply)
 // Detectors whose items have a filesystem `path` also provide
 //   allowedRoots(context)    → real paths (or a promise of them) bounding where items live
-// Review items carry `evidence.summary`, a one-line account shown to the user.
+// Review and judgment items carry `evidence.summary`, a one-line account shown to
+// the user. Judgment-only detectors discover no candidates, so apply never acts on them.
 // Other items carry a `label` instead of a `path`.
 import caches from './caches.mjs';
 import docker from './docker.mjs';
+import { appContainers, homebrew, modelCaches } from './judgment.mjs';
 import rustTarget from './rust-target.mjs';
 import { agentScratch, tempClones } from './work-dirs.mjs';
 
-export const DETECTORS = [rustTarget, docker, caches, tempClones, agentScratch];
+export const DETECTORS = [rustTarget, docker, caches, tempClones, agentScratch, modelCaches, appContainers, homebrew];
 
 export function detectorFor(id) {
   const separator = id.indexOf(':');
