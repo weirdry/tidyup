@@ -69,7 +69,6 @@ export async function cargoMarker(target) {
 
 export default {
   name: NAME,
-  class: 'routine',
 
   // Candidate locations, without eligibility checks. Cheap: a bounded directory walk.
   async discover({ roots }) {

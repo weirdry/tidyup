@@ -50,11 +50,11 @@ export function fingerprint(items) {
   return createHash('sha256').update(ids.join('\n')).digest('hex').slice(0, 16);
 }
 
-export async function scan({ home, roots, deep, now, statfs }) {
+export async function scan({ home, roots, deep, now, statfs, env }) {
   const headroom = await measureHeadroom(home, statfs);
   const measure = deep || headroom.level !== 'ok';
   const { items, skipped } = measure
-    ? await runDetectors(DETECTORS, { roots, now, home })
+    ? await runDetectors(DETECTORS, { roots, now, home, env })
     : { items: [], skipped: [] };
   return {
     host: hostname(),
