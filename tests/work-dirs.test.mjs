@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
+import { tempClones } from '../skills/tidyup/scripts/lib/detectors/work-dirs.mjs';
 import { countStatus } from '../skills/tidyup/scripts/lib/git.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { age, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
@@ -12,8 +14,10 @@ import { age, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtur
 // into a repository after the test has aged its files.
 function git(cwd, ...args) {
   const config = ['user.name=t', 'user.email=t@example.com', 'init.defaultBranch=main', 'maintenance.auto=false', 'gc.auto=0'];
+  // Inherited GIT_* variables (e.g. GIT_DIR, GIT_INDEX_FILE) could redirect writes outside the fixture.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
   const result = spawnSync('git', [...config.flatMap((entry) => ['-c', entry]), ...args], {
-    cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+    cwd, encoding: 'utf8', env: { ...env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
   });
   assert.equal(result.status, 0, `git ${args.join(' ')}: ${result.stderr}`);
   return result.stdout.trim();
@@ -34,9 +38,9 @@ function repo(dir, { remote } = {}) {
   }
 }
 
-test('status parsing counts changed and ignored entries, renames once', () => {
-  const output = [' M a.txt', '?? new.txt', 'R  b.txt', 'old-b.txt', '!! target/', ''].join('\0');
-  assert.deepEqual(countStatus(output), { changed: 3, ignored: 1 });
+test('status parsing counts changed and ignored entries, renames once in either column', () => {
+  const output = [' M a.txt', '?? new.txt', 'R  b.txt', 'old-b.txt', ' R c.txt', 'old-c.txt', '!! target/', ''].join('\0');
+  assert.deepEqual(countStatus(output), { changed: 4, ignored: 1 });
 });
 
 describe('temp-clones and agent-scratch', () => {
@@ -168,6 +172,87 @@ describe('temp-clones and agent-scratch', () => {
     const facts = item.evidence.git[0];
     assert.equal(facts.error, undefined);
     assert.deepEqual({ changed: facts.changed, only_here: facts.only_here }, { changed: 0, only_here: 1 });
+  });
+
+  test('a nested linked worktree is part of the evidence and its changes stop the removal', async () => {
+    const mainRepo = join(home, 'repos/main');
+    repo(mainRepo);
+    repo(join(tmp, 'outer'));
+    writeFileSync(join(tmp, 'outer/.gitignore'), 'nested/\n');
+    git(join(tmp, 'outer'), 'add', '.gitignore');
+    git(join(tmp, 'outer'), 'commit', '-q', '-m', 'ignore nested');
+    git(mainRepo, 'worktree', 'add', '-q', '--detach', join(tmp, 'outer/nested'));
+    writeFileSync(join(tmp, 'outer/nested/file.txt'), 'unsaved work\n');
+    age(tmp, 30);
+
+    const [item] = await scanItems();
+    assert.deepEqual(item.evidence.git.map((f) => [f.path.split('/').pop(), f.linked]), [['outer', false], ['nested', true]]);
+    const result = JSON.parse((await run(['apply', '--reviewed', item.id, '--json'])).stdout);
+    assert.equal(result.outcomes[0].outcome, 'failed');
+    assert.equal(existsSync(join(tmp, 'outer/nested/file.txt')), true);
+  });
+
+  test('an item that is itself a linked worktree is reported as deleted', async () => {
+    const mainRepo = join(home, 'repos/main');
+    repo(mainRepo);
+    git(mainRepo, 'worktree', 'add', '-q', '--detach', join(tmp, 'wt'));
+    age(tmp, 30);
+    const [item] = await scanItems();
+    const result = JSON.parse((await run(['apply', '--reviewed', item.id, '--json'])).stdout);
+    assert.equal(result.outcomes[0].outcome, 'deleted', JSON.stringify(result.outcomes));
+    assert.equal(existsSync(join(tmp, 'wt')), false);
+    assert.doesNotMatch(git(mainRepo, 'worktree', 'list'), /\/wt /);
+  });
+
+  test("a repository's fsmonitor command never runs during a scan", async () => {
+    repo(join(tmp, 'clone'));
+    const marker = join(home, 'fsmonitor-ran');
+    const hook = join(home, 'fsmonitor.sh');
+    writeFileSync(hook, `#!/bin/sh\n/usr/bin/touch '${marker}'\n`, { mode: 0o755 });
+    git(join(tmp, 'clone'), 'config', 'core.fsmonitor', hook);
+    age(tmp, 30);
+    assert.equal((await scanItems()).length, 1);
+    assert.equal(existsSync(marker), false);
+  });
+
+  test('unreadable roots, subtrees, and transcripts are reported, not treated as absent', async () => {
+    repo(join(tmp, 'clone'));
+    mkdirSync(join(tmp, 'clone/private'));
+    writeFiles(scratch, { 'project-a/session-a/notes.md': 'x' });
+    writeFiles(home, { '.claude/projects/project-a/session-a.jsonl': '{}\n' });
+    mkdirSync(join(tmp, 'locked'));
+    age(tmp, 30);
+    age(join(home, '.claude'), 30);
+    for (const dir of [join(tmp, 'clone/private'), join(tmp, 'locked'), join(home, '.claude/projects/project-a')]) chmodSync(dir, 0o000);
+    try {
+      const report = JSON.parse((await run(['scan', '--json'])).stdout);
+      const ours = report.items.filter((item) => item.detector === 'temp-clones' || item.detector === 'agent-scratch');
+      assert.deepEqual(ours, []);
+      const reasons = report.skipped.map((entry) => entry.reason).join('\n');
+      assert.match(reasons, /cannot read .*locked: EACCES/);
+      assert.match(reasons, /clone/);
+      assert.match(reasons, /cannot inspect transcript .*EACCES/);
+    } finally {
+      for (const dir of [join(tmp, 'clone/private'), join(tmp, 'locked'), join(home, '.claude/projects/project-a')]) chmodSync(dir, 0o755);
+    }
+  });
+
+  test('removal re-checks the path after removing linked worktrees', async () => {
+    // A fake git whose `worktree remove` also swaps the item for a symlink out of the roots.
+    const fakeDir = mkdtempSync(join(tmpdir(), 'tidyup-fake-git-'));
+    homes.push(fakeDir);
+    const outside = join(home, 'outside');
+    writeFiles(outside, { 'precious.txt': 'keep' });
+    writeFiles(tmp, { 'task/wt/.git': 'gitdir: /nowhere\n', 'task/wt/file.txt': 'x' });
+    writeFileSync(join(fakeDir, 'git'), `#!/bin/sh
+/bin/rm -rf '${join(tmp, 'task/wt')}'
+/bin/mv '${join(tmp, 'task')}' '${join(home, 'moved-task')}'
+/bin/ln -s '${outside}' '${join(tmp, 'task')}'
+`, { mode: 0o755 });
+    const item = { id: 'temp-clones:x', class: 'review', detector: 'temp-clones', path: join(tmp, 'task') };
+    const context = { env: { HOME: home, PATH: fakeDir }, home, now: new Date(), paths: paths() };
+    await assert.rejects(tempClones.remove(item, context), /symlink/);
+    assert.equal(existsSync(join(outside, 'precious.txt')), true);
   });
 
   test('agent session directories are review items unless their transcript is recent', async () => {

@@ -3,17 +3,20 @@
 // owned by the current user and idle for IDLE_DAYS.
 //   temp-clones    top-level entries of temp roots containing a git work tree
 //   agent-scratch  Claude Code session directories: <root>/<project>/<session>
-// Removal first removes linked worktrees through git, then the directory.
+// Removal first removes every linked worktree inside through git, re-checks the
+// path, then removes the directory.
 import { execFile } from 'node:child_process';
 import { lstat, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { estimateBytes, isInside, itemId, mapLimit, modifiedSince, realpathOrNull } from '../fsutil.mjs';
-import { findWorkTrees, gitFacts, removeLinkedWorktrees, summarizeFacts } from '../git.mjs';
+import { estimateBytes, isInside, itemId, mapLimit, modifiedSince, pathRefusal, realpathOrNull } from '../fsutil.mjs';
+import { findWorkTrees, gitFacts, hasWorkTreeWithin, removeLinkedWorktrees, summarizeFacts } from '../git.mjs';
 
 export const IDLE_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CANDIDATE_DEPTH = 3;
+const ABSENT = new Set(['ENOENT', 'ENOTDIR']);
 
 async function existingRealDirs(paths) {
   const result = [];
@@ -37,12 +40,14 @@ export async function tempRoots(context) {
   return existingRealDirs(['/private/tmp', tmpdir(), join(home, '.codex', 'worktrees')]);
 }
 
-// Real, non-symlink subdirectories of `dir` owned by the current user.
-async function ownedSubdirs(dir) {
+// Real, non-symlink subdirectories of `dir` owned by the current user. Failures
+// other than absence are pushed to `errors`.
+async function ownedSubdirs(dir, errors) {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
-  } catch {
+  } catch (error) {
+    if (!ABSENT.has(error.code)) errors.push(`cannot read ${dir}: ${error.code ?? error.message}`);
     return [];
   }
   const result = [];
@@ -61,20 +66,23 @@ async function removeTree(path) {
   await new Promise((resolve) => {
     execFile('find', [path, '-type', 'd', '!', '-perm', '-u+w', '-exec', 'chmod', 'u+w', '{}', '+'], () => resolve());
   });
-  await rm(path, { recursive: true });
+  await rm(path, { recursive: true, force: true });
 }
 
-function workDirDetector({ name, roots, candidatesIn, extraEvidence = async () => ({}), extraIneligibility = async () => null }) {
+// `finalCheck(candidate, context, since)` runs last in evaluation and returns
+// `{ reason }` to make the candidate ineligible, or `{ evidence }` to add. It may
+// throw when it cannot decide.
+function workDirDetector({ name, roots, candidatesIn, finalCheck = async () => ({ evidence: {} }) }) {
   async function evaluate(candidate, context) {
     try {
       const since = new Date(context.now.getTime() - IDLE_DAYS * DAY_MS);
       if (await modifiedSince(candidate.path, since)) return { eligible: false, reason: `modified within ${IDLE_DAYS} days` };
-      const extra = await extraIneligibility(candidate, context, since);
-      if (extra) return { eligible: false, reason: extra };
       const trees = await findWorkTrees(candidate.path);
       const facts = await mapLimit(trees, 4, (tree) => gitFacts(tree, context.env));
-      const evidence = { idle_days: IDLE_DAYS, git: facts, ...(await extraEvidence(candidate, context)) };
-      evidence.summary = [evidence.summary, summarizeFacts(facts)].filter(Boolean).join('; ');
+      const final = await finalCheck(candidate, context, since);
+      if (final.reason) return { eligible: false, reason: final.reason };
+      const evidence = { idle_days: IDLE_DAYS, git: facts, ...final.evidence };
+      evidence.summary = [final.evidence.summary, summarizeFacts(facts)].filter(Boolean).join('; ');
       return { eligible: true, evidence };
     } catch (error) {
       return { eligible: false, reason: error.message, error: true };
@@ -87,12 +95,13 @@ function workDirDetector({ name, roots, candidatesIn, extraEvidence = async () =
 
     async discover(context) {
       const candidates = [];
+      const errors = [];
       for (const root of await roots(context)) {
-        for (const path of await candidatesIn(root, context)) {
+        for (const path of await candidatesIn(root, context, errors)) {
           candidates.push({ id: itemId(name, path), class: 'review', detector: name, path });
         }
       }
-      return { candidates, skipped: [] };
+      return { candidates, skipped: errors.map((reason) => ({ detector: name, reason })) };
     },
 
     evaluate,
@@ -124,6 +133,11 @@ function workDirDetector({ name, roots, candidatesIn, extraEvidence = async () =
       const stats = await lstat(item.path);
       if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('no longer a real directory');
       await removeLinkedWorktrees(item.path, context.env);
+      // git removed the item itself when the item root was a linked worktree.
+      if (!(await lstat(item.path).catch(() => null))) return;
+      // Worktree removal can take a while; re-check the path right before deleting.
+      const refusal = await pathRefusal(item.path, await roots(context));
+      if (refusal) throw new Error(refusal);
       await removeTree(item.path);
     },
   };
@@ -133,45 +147,50 @@ export const tempClones = workDirDetector({
   name: 'temp-clones',
   roots: tempRoots,
   // Top-level entries holding a git work tree; agent scratch roots are left to agent-scratch.
-  async candidatesIn(root, context) {
+  async candidatesIn(root, context, errors) {
     const scratch = await agentScratchRoots(context);
     const result = [];
-    for (const path of await ownedSubdirs(root)) {
+    for (const path of await ownedSubdirs(root, errors)) {
       if (scratch.some((dir) => dir === path || isInside(dir, path))) continue;
-      if ((await findWorkTrees(path)).length > 0) result.push(path);
+      if (await hasWorkTreeWithin(path, CANDIDATE_DEPTH, errors)) result.push(path);
     }
     return result;
   },
 });
 
-// The session transcript, when Claude Code still has one: ~/.claude/projects/<project>/<session>.jsonl.
+// The session transcript, when Claude Code still has one:
+// ~/.claude/projects/<project>/<session>.jsonl. Absence is null; other failures throw.
 async function transcriptOf(candidate, context) {
   const home = context.env.HOME ?? context.home;
   const [session, project] = candidate.path.split('/').reverse();
   const path = join(home, '.claude', 'projects', project, `${session}.jsonl`);
-  const stats = await stat(path).catch(() => null);
-  return stats ? { path, modified: stats.mtime } : null;
+  try {
+    return { path, modified: (await stat(path)).mtime };
+  } catch (error) {
+    if (ABSENT.has(error.code)) return null;
+    throw new Error(`cannot inspect transcript ${path}: ${error.code ?? error.message}`);
+  }
 }
 
 export const agentScratch = workDirDetector({
   name: 'agent-scratch',
   roots: agentScratchRoots,
-  async candidatesIn(root) {
+  async candidatesIn(root, context, errors) {
     const sessions = [];
-    for (const project of await ownedSubdirs(root)) sessions.push(...(await ownedSubdirs(project)));
+    for (const project of await ownedSubdirs(root, errors)) sessions.push(...(await ownedSubdirs(project, errors)));
     return sessions;
   },
-  // A transcript written within the idle window means the session may still be in use.
-  async extraIneligibility(candidate, context, since) {
+  // Read once, after the git evidence: a transcript written within the idle window
+  // means the session may still be in use.
+  async finalCheck(candidate, context, since) {
     const transcript = await transcriptOf(candidate, context);
-    return transcript && transcript.modified > since ? `session transcript modified within ${IDLE_DAYS} days` : null;
-  },
-  async extraEvidence(candidate, context) {
-    const transcript = await transcriptOf(candidate, context);
+    if (transcript && transcript.modified > since) return { reason: `session transcript modified within ${IDLE_DAYS} days` };
     return {
-      session_owner: 'unknown',
-      transcript: transcript ? { path: transcript.path, modified: transcript.modified.toISOString() } : null,
-      summary: transcript ? `transcript last modified ${transcript.modified.toISOString().slice(0, 10)}` : 'no transcript found',
+      evidence: {
+        session_owner: 'unknown',
+        transcript: transcript ? { path: transcript.path, modified: transcript.modified.toISOString() } : null,
+        summary: transcript ? `transcript last modified ${transcript.modified.toISOString().slice(0, 10)}` : 'no transcript found',
+      },
     };
   },
 });

@@ -169,7 +169,10 @@ Project roots are discovered from common locations: `~/code`, `~/src`,
 Idle means no file in the subtree was modified within the window.
 
 Review items carry evidence, plus a one-line `evidence.summary` shown under the
-scan table. For each git work tree inside the item, the evidence lists:
+scan table. A candidate is picked when a git work tree exists within 3 levels.
+Evidence and removal then cover every work tree in the whole item, including
+ones nested inside another repository. For each git work tree inside the item,
+the evidence lists:
 
 - changed and untracked entries, and ignored entries;
 - `only_here`: commits that removal would lose.
@@ -184,9 +187,14 @@ scan table. For each git work tree inside the item, the evidence lists:
   never counted as zeros.
 
 Agent scratch items also record the session transcript
-(`~/.claude/projects/<project>/<session>.jsonl`) when one exists. A transcript
-modified within the idle window makes the session ineligible. Otherwise session
-ownership is shown as `unknown`; tidyup does not infer that a session has ended.
+(`~/.claude/projects/<project>/<session>.jsonl`) when one exists.
+
+- **Timing:** the transcript is read once, as the last step of evaluation. A
+  transcript modified within the idle window makes the session ineligible.
+- **Ownership:** otherwise session ownership is shown as `unknown`; tidyup does
+  not infer that a session has ended.
+- **Failures:** a root, subtree, or transcript that cannot be read (anything
+  other than absence) is reported under `skipped`, and the item is not offered.
 
 Safety rules for these directories:
 
@@ -195,12 +203,18 @@ Safety rules for these directories:
   repository could execute that repository's configuration.
 - **No redirection:** git runs with inherited `GIT_*` variables removed, so
   `GIT_DIR` or `GIT_WORK_TREE` cannot point the evidence elsewhere.
+- **No repository commands:** git runs with `core.fsmonitor` disabled, so a
+  repository's configured monitor command never runs during a scan.
 - **No index refresh:** evidence commands use `--no-optional-locks`, so a scan
   does not refresh the index and make an idle tree look recently modified.
-- **Removal order:** linked worktrees inside the item are removed first, with
-  `git worktree remove` and without `--force`, so a worktree with changes stops
-  the removal. Read-only directories, such as Go module caches, are made
-  owner-writable just before deletion.
+- **Removal order:**
+  1. Every linked worktree inside the item, nested ones included, is removed
+     deepest first with `git worktree remove` and without `--force`. A worktree
+     with changes or untracked files stops the removal.
+  2. If the item itself was a linked worktree, git has already removed it.
+  3. Otherwise the path is checked again (containment, no symlink).
+  4. Read-only directories, such as Go module caches, are made owner-writable,
+     and the directory is deleted.
 
 ## Item IDs and `apply`
 

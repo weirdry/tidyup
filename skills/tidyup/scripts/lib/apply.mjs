@@ -1,21 +1,14 @@
 // `apply`: delete user-selected items. Candidates are re-discovered, then each
 // requested item is checked and, only if it still qualifies, removed right away,
 // so no other item's checks run between an item's eligibility check and its removal.
-import { lstat } from 'node:fs/promises';
-
 import { detectorFor } from './detectors/index.mjs';
-import { isInside, realpathOrNull } from './fsutil.mjs';
+import { pathRefusal } from './fsutil.mjs';
 import { measureHeadroom } from './headroom.mjs';
 
 // Why `item.path` must not be removed now, or null. Discovery only yields real
 // paths inside the roots; this re-check guards against changes since then.
-export async function removalRefusal(item, allowedRoots) {
-  const stats = await lstat(item.path).catch(() => null);
-  if (!stats) return 'path no longer exists';
-  if (stats.isSymbolicLink()) return 'path is a symlink';
-  const real = await realpathOrNull(item.path);
-  if (!real || !allowedRoots.some((root) => isInside(real, root))) return 'path is outside the detector roots';
-  return null;
+export function removalRefusal(item, allowedRoots) {
+  return pathRefusal(item.path, allowedRoots);
 }
 
 // Outcome for one requested ID. The path check runs before evaluation (clear
