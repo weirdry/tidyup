@@ -1,8 +1,7 @@
 # tidyup design
 
-Status: accepted v1 target, implemented incrementally under
-[#2](https://github.com/weirdry/tidyup/issues/2). The [CHANGELOG](../CHANGELOG.md)
-records what is implemented.
+Status: implemented in v0.1.0 ([#2](https://github.com/weirdry/tidyup/issues/2)).
+The [CHANGELOG](../CHANGELOG.md) records changes by version.
 
 ## Purpose
 
