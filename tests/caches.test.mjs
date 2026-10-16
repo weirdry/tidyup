@@ -115,6 +115,18 @@ describe('package caches', () => {
     })).stdout).items.find((item) => item.kind === 'uv');
     assert.equal(viaConfigFile.class, 'review');
 
+    const relative = JSON.parse((await runMain(main, ['scan', '--json'], {
+      home, percent: 5, tools, env: { UV_CONFIG_FILE: 'custom/uv.toml' },
+    })).stdout).items.find((item) => item.kind === 'uv');
+    assert.equal(relative.class, 'review', 'a relative UV_CONFIG_FILE resolves against home, like uv');
+    assert.match(relative.evidence.warning, /link-mode is symlink/);
+
+    const unreadable = JSON.parse((await runMain(main, ['scan', '--json'], {
+      home, percent: 5, tools, env: { UV_CONFIG_FILE: join(home, 'missing.toml') },
+    })).stdout).items.find((item) => item.kind === 'uv');
+    assert.equal(unreadable.class, 'review');
+    assert.match(unreadable.evidence.warning, /could not be read/);
+
     const byDefault = (await cacheItems()).find((item) => item.kind === 'uv');
     assert.equal(byDefault.class, 'routine');
     assert.match(byDefault.evidence.link_mode, /clone/);

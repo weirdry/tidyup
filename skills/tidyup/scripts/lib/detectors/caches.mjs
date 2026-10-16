@@ -4,7 +4,7 @@
 // Caches are located by asking the tool, run from the home directory so that the
 // global (not a project's) configuration applies.
 import { lstat, readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { displayPath, estimateBytes, itemId, mapLimit, realpathOrNull } from '../fsutil.mjs';
 import { resolveTool, runTool } from '../tools.mjs';
@@ -79,15 +79,18 @@ async function isDirectory(path) {
 // global config files (UV_CONFIG_FILE, or the user and system uv.toml), in any
 // section or inline table, such as [pip]. With `symlink`, environments point into
 // the cache and break when it is cleaned. Project-level settings are not inspected.
+// A relative UV_CONFIG_FILE resolves against `home`, where uv itself is run; if
+// it cannot be read, the mode is 'unknown', which callers treat conservatively.
 export async function uvLinkModes(env, home) {
   const modes = env.UV_LINK_MODE ? [env.UV_LINK_MODE] : [];
   const userConfig = env.XDG_CONFIG_HOME ? join(env.XDG_CONFIG_HOME, 'uv', 'uv.toml') : join(home, '.config', 'uv', 'uv.toml');
-  const files = env.UV_CONFIG_FILE ? [env.UV_CONFIG_FILE] : [userConfig, '/etc/uv/uv.toml'];
-  for (const file of files) {
+  const explicit = env.UV_CONFIG_FILE ? resolve(home, env.UV_CONFIG_FILE) : null;
+  for (const file of explicit ? [explicit] : [userConfig, '/etc/uv/uv.toml']) {
     let text;
     try {
       text = await readFile(file, 'utf8');
     } catch {
+      if (explicit) modes.push('unknown');
       continue; // No config file.
     }
     for (const match of text.matchAll(/link-mode\s*=\s*["']([a-z-]+)["']/g)) modes.push(match[1]);
@@ -116,9 +119,11 @@ async function candidateFor(spec, path, context) {
   if (spec.kind === 'uv') {
     const modes = await uvLinkModes(context.env, home);
     evidence.link_mode = modes.length > 0 ? [...new Set(modes)].join(', ') : 'clone (default on macOS)';
-    if (modes.includes('symlink')) {
+    if (modes.includes('symlink') || modes.includes('unknown')) {
       itemClass = 'review';
-      evidence.warning = 'uv link-mode is symlink: environments linked into this cache break when it is cleaned';
+      evidence.warning = modes.includes('symlink')
+        ? 'uv link-mode is symlink: environments linked into this cache break when it is cleaned'
+        : 'UV_CONFIG_FILE could not be read, so the uv link mode is unknown';
     }
   }
   return {

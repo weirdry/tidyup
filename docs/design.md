@@ -154,6 +154,8 @@ that cannot be inspected (for example EACCES) is reported under `skipped`.
     with a warning. The global configuration means `UV_LINK_MODE`, plus any
     `link-mode` value in the global config files: `UV_CONFIG_FILE`, or else the
     user and system `uv.toml`, in any section or inline table such as `[pip]`.
+  - A relative `UV_CONFIG_FILE` resolves against the home directory, where uv
+    runs. An unreadable one also makes the item a review item.
   - Project-level link-mode settings are not inspected.
 
 External CLIs (docker and the package tools) are found on `PATH`, then in common
