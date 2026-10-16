@@ -18,7 +18,10 @@ export async function removalRefusal(item, allowedRoots) {
   return null;
 }
 
-async function processOne(id, { detector, candidate, reviewedSet, context }) {
+// Outcome for one requested ID. The path check runs before evaluation (clear
+// refusals, no needless traversal) and again after it, immediately before
+// removal, because evaluation can take minutes and the path may change meanwhile.
+export async function applyItem(id, { detector, candidate, reviewedSet, context }) {
   if (!detector) return { id, outcome: 'refused', reason: 'unknown detector' };
   if (!candidate) return { id, outcome: 'refused', reason: 'not found (pass the same --root options as scan)' };
   const base = { id, path: candidate.path };
@@ -32,6 +35,8 @@ async function processOne(id, { detector, candidate, reviewedSet, context }) {
   if (pathReason) return { ...base, outcome: 'refused', reason: pathReason };
   const verdict = await detector.evaluate(candidate, context);
   if (!verdict.eligible) return { ...base, outcome: 'refused', reason: `no longer eligible: ${verdict.reason}` };
+  const lateReason = await removalRefusal(candidate, detector.allowedRoots(context));
+  if (lateReason) return { ...base, outcome: 'refused', reason: lateReason };
   try {
     await detector.remove(candidate);
     return { ...base, outcome: 'deleted' };
@@ -60,7 +65,7 @@ export async function apply({ ids, reviewed, home, roots, now, statfs }) {
 
   const outcomes = [];
   for (const id of requested) {
-    outcomes.push(await processOne(id, { detector: detectorFor(id), candidate: candidates.get(id), reviewedSet, context }));
+    outcomes.push(await applyItem(id, { detector: detectorFor(id), candidate: candidates.get(id), reviewedSet, context }));
   }
 
   const after = await measureHeadroom(home, statfs);
