@@ -1,0 +1,177 @@
+// Directories that may hold unique work, so they are review items: the user must
+// see the evidence and name each ID. Both detectors require the directory to be
+// owned by the current user and idle for IDLE_DAYS.
+//   temp-clones    top-level entries of temp roots containing a git work tree
+//   agent-scratch  Claude Code session directories: <root>/<project>/<session>
+// Removal first removes linked worktrees through git, then the directory.
+import { execFile } from 'node:child_process';
+import { lstat, readdir, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { estimateBytes, isInside, itemId, mapLimit, modifiedSince, realpathOrNull } from '../fsutil.mjs';
+import { findWorkTrees, gitFacts, removeLinkedWorktrees, summarizeFacts } from '../git.mjs';
+
+export const IDLE_DAYS = 7;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function existingRealDirs(paths) {
+  const result = [];
+  for (const path of paths) {
+    const real = await realpathOrNull(path);
+    if (real && (await stat(real)).isDirectory() && !result.includes(real)) result.push(real);
+  }
+  return result;
+}
+
+// Default roots; tests and callers may override them through context.paths.
+export function agentScratchRoots(context) {
+  if (context.paths?.agentScratchRoots) return existingRealDirs(context.paths.agentScratchRoots);
+  const name = `claude-${process.getuid()}`;
+  return existingRealDirs([join('/private/tmp', name), join(tmpdir(), name)]);
+}
+
+export async function tempRoots(context) {
+  if (context.paths?.tempRoots) return existingRealDirs(context.paths.tempRoots);
+  const home = context.env.HOME ?? context.home;
+  return existingRealDirs(['/private/tmp', tmpdir(), join(home, '.codex', 'worktrees')]);
+}
+
+// Real, non-symlink subdirectories of `dir` owned by the current user.
+async function ownedSubdirs(dir) {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const result = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const path = join(dir, entry.name);
+    const stats = await lstat(path).catch(() => null);
+    if (stats?.isDirectory() && stats.uid === process.getuid()) result.push(path);
+  }
+  return result;
+}
+
+// Read-only directories (e.g. Go module caches) block deleting their entries, so
+// make them owner-writable first (find does not follow symlinks), then remove.
+async function removeTree(path) {
+  await new Promise((resolve) => {
+    execFile('find', [path, '-type', 'd', '!', '-perm', '-u+w', '-exec', 'chmod', 'u+w', '{}', '+'], () => resolve());
+  });
+  await rm(path, { recursive: true });
+}
+
+function workDirDetector({ name, roots, candidatesIn, extraEvidence = async () => ({}), extraIneligibility = async () => null }) {
+  async function evaluate(candidate, context) {
+    try {
+      const since = new Date(context.now.getTime() - IDLE_DAYS * DAY_MS);
+      if (await modifiedSince(candidate.path, since)) return { eligible: false, reason: `modified within ${IDLE_DAYS} days` };
+      const extra = await extraIneligibility(candidate, context, since);
+      if (extra) return { eligible: false, reason: extra };
+      const trees = await findWorkTrees(candidate.path);
+      const facts = await mapLimit(trees, 4, (tree) => gitFacts(tree, context.env));
+      const evidence = { idle_days: IDLE_DAYS, git: facts, ...(await extraEvidence(candidate, context)) };
+      evidence.summary = [evidence.summary, summarizeFacts(facts)].filter(Boolean).join('; ');
+      return { eligible: true, evidence };
+    } catch (error) {
+      return { eligible: false, reason: error.message, error: true };
+    }
+  }
+
+  return {
+    name,
+    roots,
+
+    async discover(context) {
+      const candidates = [];
+      for (const root of await roots(context)) {
+        for (const path of await candidatesIn(root, context)) {
+          candidates.push({ id: itemId(name, path), class: 'review', detector: name, path });
+        }
+      }
+      return { candidates, skipped: [] };
+    },
+
+    evaluate,
+
+    async detect(context) {
+      const { candidates, skipped } = await this.discover(context);
+      const items = [];
+      await mapLimit(candidates, 4, async (candidate) => {
+        const verdict = await evaluate(candidate, context);
+        if (verdict.error) skipped.push({ detector: name, reason: verdict.reason });
+        if (!verdict.eligible) return;
+        let bytes = null;
+        try {
+          bytes = await estimateBytes(candidate.path);
+        } catch (error) {
+          skipped.push({ detector: name, reason: error.message });
+        }
+        items.push({ ...candidate, estimated_bytes: bytes, evidence: verdict.evidence });
+      });
+      items.sort((a, b) => a.path.localeCompare(b.path));
+      return { items, skipped };
+    },
+
+    allowedRoots(context) {
+      return roots(context);
+    },
+
+    async remove(item, context) {
+      const stats = await lstat(item.path);
+      if (stats.isSymbolicLink() || !stats.isDirectory()) throw new Error('no longer a real directory');
+      await removeLinkedWorktrees(item.path, context.env);
+      await removeTree(item.path);
+    },
+  };
+}
+
+export const tempClones = workDirDetector({
+  name: 'temp-clones',
+  roots: tempRoots,
+  // Top-level entries holding a git work tree; agent scratch roots are left to agent-scratch.
+  async candidatesIn(root, context) {
+    const scratch = await agentScratchRoots(context);
+    const result = [];
+    for (const path of await ownedSubdirs(root)) {
+      if (scratch.some((dir) => dir === path || isInside(dir, path))) continue;
+      if ((await findWorkTrees(path)).length > 0) result.push(path);
+    }
+    return result;
+  },
+});
+
+// The session transcript, when Claude Code still has one: ~/.claude/projects/<project>/<session>.jsonl.
+async function transcriptOf(candidate, context) {
+  const home = context.env.HOME ?? context.home;
+  const [session, project] = candidate.path.split('/').reverse();
+  const path = join(home, '.claude', 'projects', project, `${session}.jsonl`);
+  const stats = await stat(path).catch(() => null);
+  return stats ? { path, modified: stats.mtime } : null;
+}
+
+export const agentScratch = workDirDetector({
+  name: 'agent-scratch',
+  roots: agentScratchRoots,
+  async candidatesIn(root) {
+    const sessions = [];
+    for (const project of await ownedSubdirs(root)) sessions.push(...(await ownedSubdirs(project)));
+    return sessions;
+  },
+  // A transcript written within the idle window means the session may still be in use.
+  async extraIneligibility(candidate, context, since) {
+    const transcript = await transcriptOf(candidate, context);
+    return transcript && transcript.modified > since ? `session transcript modified within ${IDLE_DAYS} days` : null;
+  },
+  async extraEvidence(candidate, context) {
+    const transcript = await transcriptOf(candidate, context);
+    return {
+      session_owner: 'unknown',
+      transcript: transcript ? { path: transcript.path, modified: transcript.modified.toISOString() } : null,
+      summary: transcript ? `transcript last modified ${transcript.modified.toISOString().slice(0, 10)}` : 'no transcript found',
+    };
+  },
+});

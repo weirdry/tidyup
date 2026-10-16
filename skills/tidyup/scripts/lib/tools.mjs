@@ -30,6 +30,7 @@ export async function resolveTool(name, env, { override, locations = [] } = {}) 
     '/opt/homebrew/bin',
     '/usr/local/bin',
     ...(home ? [join(home, '.local', 'bin'), join(home, '.local', 'share', 'mise', 'shims')] : []),
+    '/usr/bin',
   ];
   for (const dir of dirs) {
     const candidate = join(dir, name);

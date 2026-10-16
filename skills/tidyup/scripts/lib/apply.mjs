@@ -25,7 +25,7 @@ export async function applyItem(id, { detector, candidate, reviewedSet, context 
   if (!detector) return { id, outcome: 'refused', reason: 'unknown detector' };
   if (!candidate) return { id, outcome: 'refused', reason: 'not found (pass the same --root options as scan)' };
   const base = candidate.path === undefined ? { id, label: candidate.label } : { id, path: candidate.path };
-  const pathCheck = () => (candidate.path === undefined ? null : removalRefusal(candidate, detector.allowedRoots(context)));
+  const pathCheck = async () => (candidate.path === undefined ? null : removalRefusal(candidate, await detector.allowedRoots(context)));
   if (candidate.class === 'review' && !reviewedSet.has(id)) {
     return { ...base, outcome: 'refused', reason: 'review item requires --reviewed' };
   }
@@ -46,11 +46,11 @@ export async function applyItem(id, { detector, candidate, reviewedSet, context 
   }
 }
 
-export async function apply({ ids, reviewed, home, roots, now, statfs, env }) {
+export async function apply({ ids, reviewed, home, roots, now, statfs, env, paths }) {
   const before = await measureHeadroom(home, statfs);
   const requested = [...new Set([...ids, ...reviewed])];
   const reviewedSet = new Set(reviewed);
-  const context = { roots, now, home, env };
+  const context = { roots, now, home, env, paths };
 
   const candidates = new Map();
   const skipped = [];

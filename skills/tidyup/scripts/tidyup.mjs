@@ -47,6 +47,7 @@ export async function main(argv, {
   env = process.env,
   statfs = nodeStatfs,
   now = new Date(),
+  paths,
 } = {}) {
   if (platform !== 'darwin') {
     stderr.write('tidyup supports macOS only\n');
@@ -81,11 +82,11 @@ export async function main(argv, {
   try {
     const roots = await resolveRoots(home, values.root ?? []);
     if (command === 'scan') {
-      const report = await scan({ home, roots, deep: Boolean(values.deep), now, statfs, env });
+      const report = await scan({ home, roots, deep: Boolean(values.deep), now, statfs, env, paths });
       stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : renderScan(report, home));
       return EXIT[report.level] ?? EXIT.ok;
     }
-    const result = await apply({ ids, reviewed: values.reviewed ?? [], home, roots, now, statfs, env });
+    const result = await apply({ ids, reviewed: values.reviewed ?? [], home, roots, now, statfs, env, paths });
     stdout.write(values.json ? `${JSON.stringify(result, null, 2)}\n` : renderApply(result, home));
     return result.outcomes.every((o) => o.outcome === 'deleted') ? EXIT.ok : EXIT.error;
   } catch (error) {

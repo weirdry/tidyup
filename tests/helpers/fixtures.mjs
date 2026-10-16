@@ -175,9 +175,10 @@ let emptyDocker;
 let emptyTools;
 
 // Runs main() with captured output. Docker and the package tools are empty fakes
-// unless `docker` / `tools` are given, so tests never reach real installations.
+// unless `docker` / `tools` are given, and temp and agent-scratch roots are empty
+// unless `paths` is given, so tests never reach real installations or /tmp.
 // `env` entries are merged over that hermetic base.
-export async function runMain(main, argv, { home, percent = 50, docker, tools, env = {}, ...rest } = {}) {
+export async function runMain(main, argv, { home, percent = 50, docker, tools, env = {}, paths = { tempRoots: [], agentScratchRoots: [] }, ...rest } = {}) {
   emptyDocker ??= fakeDocker();
   emptyTools ??= fakeTools();
   const out = { stdout: '', stderr: '' };
@@ -187,6 +188,7 @@ export async function runMain(main, argv, { home, percent = 50, docker, tools, e
     stderr: { write: (text) => { out.stderr += text; } },
     env: { HOME: home, TIDYUP_DOCKER: (docker ?? emptyDocker).bin, PATH: (tools ?? emptyTools).dir, ...env },
     statfs: fakeStatfs(percent),
+    paths,
     ...rest,
   });
   return { code, ...out };

@@ -124,6 +124,7 @@ async function candidateFor(spec, path, context) {
       evidence.warning = modes.includes('symlink')
         ? 'uv link-mode is symlink: environments linked into this cache break when it is cleaned'
         : 'UV_CONFIG_FILE could not be read, so the uv link mode is unknown';
+      evidence.summary = evidence.warning;
     }
   }
   return {
