@@ -124,18 +124,60 @@ export function fakeDocker(state = {}) {
   };
 }
 
-let emptyDocker;
+// Fake npm, pnpm, uv and go CLIs sharing `state.json` in their directory, with
+// cache paths { npm, pnpm, uv, goCache, goModCache } (null: no cache). They log
+// [tool, cwd, ...args] to `calls.log`. The shebang uses `env node` on purpose, so
+// they work only when the caller provides node on PATH, as tidyup does.
+const FAKE_TOOL = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const tool = path.basename(process.argv[1]);
+const state = JSON.parse(fs.readFileSync(path.join(__dirname, 'state.json'), 'utf8'));
+const args = process.argv.slice(2);
+fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify([tool, process.cwd(), ...args]) + '\\n');
+const print = (value) => console.log(value ?? '');
+const wipe = (dir) => dir && fs.rmSync(dir, { recursive: true, force: true });
+const cmd = [tool, ...args].join(' ');
+if (cmd === 'npm config get cache') print(state.npm);
+else if (cmd === 'npm cache clean --force') wipe(state.npm && path.join(state.npm, '_cacache'));
+else if (cmd === 'pnpm store path') print(state.pnpm);
+else if (cmd === 'pnpm store prune') {}
+else if (cmd === 'uv cache dir') print(state.uv);
+else if (cmd === 'uv cache clean') wipe(state.uv);
+else if (cmd === 'go env GOCACHE') print(state.goCache);
+else if (cmd === 'go env GOMODCACHE') print(state.goModCache);
+else if (cmd === 'go clean -cache') wipe(state.goCache);
+else if (cmd === 'go clean -modcache') wipe(state.goModCache);
+else { process.stderr.write('unsupported: ' + cmd + '\\n'); process.exit(1); }
+`;
 
-// Runs main() with captured output. Docker is an empty fake unless `docker` is given,
-// so tests never reach a real Docker installation.
-export async function runMain(main, argv, { home, percent = 50, docker, ...rest } = {}) {
+export function fakeTools(state = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'tidyup-tools-'));
+  writeFileSync(join(dir, 'state.json'), JSON.stringify({ npm: null, pnpm: null, uv: null, goCache: null, goModCache: null, ...state }));
+  writeFileSync(join(dir, 'calls.log'), '');
+  for (const tool of ['npm', 'pnpm', 'uv', 'go']) writeFileSync(join(dir, tool), FAKE_TOOL, { mode: 0o755 });
+  return {
+    dir,
+    calls: () => readFileSync(join(dir, 'calls.log'), 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)),
+    update: (patch) => writeFileSync(join(dir, 'state.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8')), ...patch })),
+  };
+}
+
+let emptyDocker;
+let emptyTools;
+
+// Runs main() with captured output. Docker and the package tools are empty fakes
+// unless `docker` / `tools` are given, so tests never reach real installations.
+// `env` entries are merged over that hermetic base.
+export async function runMain(main, argv, { home, percent = 50, docker, tools, env = {}, ...rest } = {}) {
   emptyDocker ??= fakeDocker();
+  emptyTools ??= fakeTools();
   const out = { stdout: '', stderr: '' };
   const code = await main(argv, {
     platform: 'darwin',
     stdout: { write: (text) => { out.stdout += text; } },
     stderr: { write: (text) => { out.stderr += text; } },
-    env: { HOME: home, TIDYUP_DOCKER: (docker ?? emptyDocker).bin },
+    env: { HOME: home, TIDYUP_DOCKER: (docker ?? emptyDocker).bin, PATH: (tools ?? emptyTools).dir, ...env },
     statfs: fakeStatfs(percent),
     ...rest,
   });

@@ -7,10 +7,11 @@
 // Detectors whose items have a filesystem `path` also provide
 //   allowedRoots(context)    → real paths that bound where those items may live
 // Other items carry a `label` instead of a `path`.
+import caches from './caches.mjs';
 import docker from './docker.mjs';
 import rustTarget from './rust-target.mjs';
 
-export const DETECTORS = [rustTarget, docker];
+export const DETECTORS = [rustTarget, docker, caches];
 
 export function detectorFor(id) {
   const separator = id.indexOf(':');
