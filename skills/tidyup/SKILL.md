@@ -5,18 +5,8 @@ description: "Measure and reclaim disk space on a macOS development machine. Use
 
 # tidyup
 
-tidyup measures disk headroom and lists cleanup candidates with evidence. It
-deletes only the items the user selects.
-
-> **Status: v1 in progress.** Detected so far:
-> - Rust build output (`rust-target`);
-> - Docker (`docker`);
-> - package caches (`caches`: npm, pnpm, uv, Go);
-> - temp clones (`temp-clones`);
-> - agent session scratch (`agent-scratch`).
->
-> For other space users, investigate manually. Show the user what you find, and
-> delete nothing without their explicit approval.
+tidyup measures disk headroom and lists what can be cleaned. Every item comes
+with evidence, and tidyup deletes only the items the user selects.
 
 ## Running
 
@@ -30,43 +20,58 @@ The launcher needs Node.js 22 or newer. It looks in `$TIDYUP_NODE` first, then
 `PATH`, then `mise which node`. If it reports that Node is missing, ask the user
 for the Node path and pass it as `TIDYUP_NODE`.
 
+## Item classes
+
+- **routine:** regenerates on the next build, pull, or download. Examples are
+  Rust `target/`, Docker build cache, dangling images, and package caches.
+- **review:** may hold unique work. Examples are temp clones, agent session
+  scratch, and unused tagged Docker images. The scan prints a "Review evidence"
+  line for each.
+- **judgment:** user data or costly to recreate. Examples are Docker volumes,
+  the Hugging Face model cache, leftover data of uninstalled apps, and Homebrew
+  cleanup. These have no ID, and tidyup never deletes them.
+
 ## Interactive workflow
 
-1. **Scan.** Run `scan`. Use `scan --deep` when the user wants candidates even
-   though headroom is `ok`. Add `--root <dir>` for project directories outside
-   the default locations (`~/code`, `~/src`, `~/Developer`, `~/projects`,
-   `~/_GIT`, `~/git`, `~/work`).
-2. **Present.** Show the headroom line and the candidate table. Say that sizes
-   are estimates and that actual freed space can be lower. Explain each class:
-   - `routine` items regenerate on the next build or download.
-   - `review` items may hold unique work.
-   - `judgment` items are for the user alone to decide.
-3. **Ask.** Ask which IDs to delete. You may recommend routine items, but wait
-   for the user to choose.
-   Review items need the user to name each ID after seeing its evidence. They
-   include unused tagged Docker images, temp clones, and agent session scratch.
-   Show the "Review evidence" lines from the scan, and point out changed files,
-   commits "only here", and stashes, because removal loses them. Pass the named
-   IDs with `--reviewed <id>`.
+1. **Scan.** Run `scan`.
+   - Use `scan --deep` when the user wants to see candidates even though
+     headroom is `ok`.
+   - Add `--root <dir>` for project directories outside the defaults: `~/code`,
+     `~/src`, `~/Developer`, `~/projects`, `~/_GIT`, `~/git`, and `~/work`.
+2. **Present.** Show:
+   - the headroom line;
+   - the candidate table;
+   - the "Review evidence" lines;
+   - the "Judgment items" lines.
+
+   Sizes are estimates, and actual freed space can be lower. For review items,
+   point out changed files, commits "only here", and stashes: removal loses them.
+3. **Ask.** Ask which IDs to delete. You may recommend routine items; wait for
+   the user to choose.
 4. **Apply.** Run `apply <id>...` with the same `--root` options as the scan.
-   Report each outcome (`deleted`, `refused`, `failed`) and the headroom change.
-   A `refused` item was not deleted because it no longer qualified. Do not work
-   around a refusal with other commands.
+   Pass review IDs the user named with `--reviewed <id>`. Report each outcome
+   (`deleted`, `refused`, `failed`) and the headroom change.
+   - A `refused` item no longer qualified, and a `failed` item hit an error;
+     neither was deleted. Do not work around either with other commands.
+5. **Judgment items.** Explain what each one is, using its evidence. Remove one
+   only when the user explicitly asks for that specific item. Then follow
+   `evidence.hint`, the tool's own command or Finder, and confirm the exact
+   command before running it.
 
 ## Scheduled workflow
 
 Unattended runs call only `scan --json`, never `apply`.
 
-- **Exit code:** the level. 0 means `ok`, 10 `recommend`, and 20 `urgent`; 1
+- **Exit code:** the level. 0 is `ok`, 10 is `recommend`, 20 is `urgent`, and 1
   means the scan failed. Read stdout for every exit code.
-- **When to report:** when the level, the `fingerprint`, or the `skipped` list
-  changed since the previous run.
-- **Empty `items`:** when `candidates_measured` is `false`, an empty list means
-  the candidates were not measured, not that nothing was found.
+- **When to report:** compare with the previous run, and report when the level,
+  the `fingerprint`, or the `skipped` list changed.
+- **Empty items:** when `candidates_measured` is `false`, an empty `items` list
+  means the candidates were not measured, not that nothing was found.
 
 ## Safety rules
 
 - `scan` is read-only.
 - Pass `--reviewed <id>` only for IDs that the user named in this conversation
   after seeing their evidence. Never generate it on your own.
-- Judgment items have no ID. Never delete them with other commands either.
+- Never delete judgment items unless the user explicitly asks for that item.
