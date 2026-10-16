@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, beforeEach, describe, test } from 'node:test';
 
-import { itemsFromUsage, parseSize, parseTimestamp, resolveDocker } from '../skills/tidyup/scripts/lib/detectors/docker.mjs';
+import dockerDetector, { itemsFromUsage, parseSize, parseTimestamp, resolveDocker, tagsById } from '../skills/tidyup/scripts/lib/detectors/docker.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { fakeDocker, makeHome, removeTree, runMain } from './helpers/fixtures.mjs';
 
@@ -52,8 +52,13 @@ describe('docker parsing', () => {
   });
 });
 
+// What the real `system df -v` shows: one row per image, with only its first tag.
+const dfRows = (rows) => rows.filter((row, index) => rows.findIndex((other) => other.ID === row.ID) === index);
+const derive = (usage, daemonId = 'daemon-a') =>
+  itemsFromUsage({ ...usage, Images: dfRows(usage.Images) }, tagsById(usage.Images), daemonId, NOW);
+
 describe('docker items', () => {
-  const items = itemsFromUsage(USAGE, 'daemon-a', NOW);
+  const { items, skipped } = derive(USAGE);
   const byKind = (kind) => items.filter((item) => item.kind === kind);
 
   test('build cache counts only old records that are neither shared nor in use', () => {
@@ -69,10 +74,18 @@ describe('docker items', () => {
     assert.equal(dangling.estimated_bytes, 100_000_000);
   });
 
-  test('unused tagged images are review items, one per image, largest first', () => {
+  test('unused tagged images are review items with all their tags, largest first', () => {
     const images = byKind('image');
     assert.deepEqual(images.map((item) => item.evidence.refs), [['app:dev', 'app:latest'], ['tool:1.0']]);
     assert.ok(images.every((item) => item.class === 'review' && item.id));
+    assert.deepEqual(skipped, []);
+  });
+
+  test('images with an unknown container count are reported, never candidates', () => {
+    const usage = { Images: [image('fff', 'mystery', '1', 'N/A', '9GB'), image('ggg', '<none>', '<none>', 'N/A', '1GB')] };
+    const result = derive(usage);
+    assert.deepEqual(result.items, []);
+    assert.match(result.skipped[0].reason, /2 image\(s\) not evaluated: container count unavailable/);
   });
 
   test('volumes are one judgment item without an ID', () => {
@@ -84,9 +97,9 @@ describe('docker items', () => {
   });
 
   test('IDs are bound to the daemon, and image IDs to their tags', () => {
-    const other = itemsFromUsage(USAGE, 'daemon-b', NOW);
+    const other = derive(USAGE, 'daemon-b').items;
     assert.notEqual(other.find((item) => item.kind === 'build-cache').id, byKind('build-cache')[0].id);
-    const retagged = itemsFromUsage({ ...USAGE, Images: [...USAGE.Images, image('eee', 'tool', '1.1', '0', '50MB')] }, 'daemon-a', NOW);
+    const retagged = derive({ ...USAGE, Images: [...USAGE.Images, image('eee', 'tool', '1.1', '0', '50MB')] }).items;
     const tool = (list) => list.find((item) => item.evidence.image_id === 'sha256:eee').id;
     assert.notEqual(tool(retagged), tool(items));
   });
@@ -103,6 +116,8 @@ describe('docker through the CLI', () => {
   });
   after(() => cleanup.forEach(removeTree));
 
+  // Docker calls without the pinned `--context <name>` prefix.
+  const plainCalls = () => docker.calls().map((args) => (args[0] === '--context' ? args.slice(2) : args));
   const scanItems = async () => JSON.parse((await runMain(main, ['scan', '--json'], { home, percent: 5, docker })).stdout).items;
   const idOf = (items, kind) => items.find((item) => item.kind === kind).id;
 
@@ -118,7 +133,7 @@ describe('docker through the CLI', () => {
     const items = await scanItems();
     const result = await runMain(main, ['apply', idOf(items, 'build-cache'), idOf(items, 'dangling-images'), '--json'], { home, percent: 5, docker });
     assert.equal(result.code, EXIT.ok, result.stdout + result.stderr);
-    const calls = docker.calls();
+    const calls = plainCalls();
     assert.ok(calls.some((args) => args.join(' ') === 'builder prune --force --filter until=168h'));
     assert.ok(calls.some((args) => args.join(' ') === 'image prune --force'));
   });
@@ -131,7 +146,7 @@ describe('docker through the CLI', () => {
 
     const applied = await runMain(main, ['apply', '--reviewed', id, '--json'], { home, percent: 5, docker });
     assert.equal(applied.code, EXIT.ok, applied.stdout);
-    const removals = docker.calls().filter(([a, b]) => a === 'image' && b === 'rm').map((args) => args[2]);
+    const removals = plainCalls().filter(([a, b]) => a === 'image' && b === 'rm').map((args) => args[2]);
     assert.deepEqual(removals, ['app:dev', 'app:latest']);
   });
 
@@ -146,7 +161,27 @@ describe('docker through the CLI', () => {
     const used = await runMain(main, ['apply', '--reviewed', id, '--json'], { home, percent: 5, docker });
     assert.equal(used.code, EXIT.error);
     assert.match(JSON.parse(used.stdout).outcomes[0].reason, /used by a container/);
-    assert.equal(docker.calls().some(([a, b]) => a === 'image' && b === 'rm'), false);
+    assert.equal(plainCalls().some(([a, b]) => a === 'image' && b === 'rm'), false);
+  });
+
+  test('every docker call in an operation is pinned to the starting context', async () => {
+    const items = await scanItems();
+    await runMain(main, ['apply', idOf(items, 'dangling-images'), '--json'], { home, percent: 5, docker });
+    const calls = docker.calls().filter((args) => !(args[0] === 'context' && args[1] === 'show'));
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((args) => args[0] === '--context' && args[1] === 'fake-ctx'), JSON.stringify(calls));
+  });
+
+  test('with DOCKER_HOST set, the environment pins the endpoint and no context is passed', async () => {
+    await runMain(main, ['scan', '--json'], { home, percent: 5, docker, env: { HOME: home, TIDYUP_DOCKER: docker.bin, DOCKER_HOST: 'unix:///fake.sock' } });
+    assert.ok(docker.calls().every((args) => args[0] !== '--context'));
+  });
+
+  test('an item is refused when the daemon behind the context changed', async () => {
+    const [candidate] = (await scanItems()).filter((item) => item.kind === 'image');
+    docker.update({ id: 'daemon-b' });
+    const verdict = await dockerDetector.evaluate(candidate, { env: { HOME: home, TIDYUP_DOCKER: docker.bin }, now: new Date() });
+    assert.deepEqual(verdict, { eligible: false, reason: 'docker daemon changed' });
   });
 
   test('an unreachable daemon is reported as skipped', async () => {

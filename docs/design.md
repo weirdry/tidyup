@@ -106,14 +106,22 @@ conversation.
 | `model-caches`, `app-containers`, `homebrew` | judgment | sizes only | none |
 
 The `docker` detector uses the docker CLI, so it works with any runtime: Colima,
-Docker Desktop, or OrbStack. It reads one `docker system df -v` snapshot. The CLI
-is found through `$TIDYUP_DOCKER`, then `PATH`, then the Homebrew and Docker
-Desktop locations. An invalid `$TIDYUP_DOCKER` is an error.
+Docker Desktop, or OrbStack.
 
+- **Data sources:** sizes and container counts come from `docker system df -v`,
+  and the full tag sets from `docker image ls`. `system df` shows only an image's
+  first tag.
+- **Unknown container counts:** images whose count is unknown (`N/A`) are
+  reported under `skipped` and are never candidates.
+- **CLI location:** `$TIDYUP_DOCKER`, then `PATH`, then the Homebrew and Docker
+  Desktop locations. An invalid `$TIDYUP_DOCKER` is an error.
+- **Endpoint pinning:** each operation pins the docker context it started with
+  by passing `--context`, unless `DOCKER_HOST` already pins the endpoint.
 - **No Docker installed:** the detector is silently absent.
 - **Daemon unreachable:** reported under `skipped`.
-- **Before removing an image:** `apply` confirms that its tags are unchanged and
-  that no container uses it.
+- **Before removing any Docker item:** `apply` confirms the daemon ID is
+  unchanged. For images, it also confirms the tags are unchanged and that no
+  container uses the image.
 
 Project roots are discovered from common locations: `~/code`, `~/src`,
 `~/Developer`, `~/projects`, `~/_GIT`, `~/git` and `~/work`, plus `--root` options.

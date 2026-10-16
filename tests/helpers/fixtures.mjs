@@ -61,6 +61,7 @@ export function fakeStatfs(percent) {
 
 // A fake docker CLI backed by `state.json` in its own directory. It logs each
 // invocation to `calls.log` and applies removals to the state, like the real CLI.
+// Its `system df` and `image ls` output follow the real CLI's formatters.
 // `state.ancestors` lists image IDs that `container ls --filter ancestor=` reports as
 // used even though `system df` does not yet count them (a container started meanwhile).
 const FAKE_DOCKER = `
@@ -73,10 +74,20 @@ fs.appendFileSync(path.join(__dirname, 'calls.log'), JSON.stringify(args) + '\\n
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state));
 const fail = (message) => { process.stderr.write(message + '\\n'); process.exit(1); };
 const ref = (image) => image.Repository + ':' + image.Tag;
-if (!state.up) fail('Cannot connect to the Docker daemon');
+if (args[0] === '--context') args.splice(0, 2);
 const [a, b] = args;
+if (a === 'context' && b === 'show') { console.log(state.context); process.exit(0); }
+if (!state.up) fail('Cannot connect to the Docker daemon');
 if (a === 'info') console.log(state.id);
-else if (a === 'system' && b === 'df') console.log(JSON.stringify({ Images: state.images, Containers: [], Volumes: state.volumes, BuildCache: state.buildCache }));
+else if (a === 'system' && b === 'df') {
+  // Like the real formatter: one row per image, carrying only its first tag.
+  const seen = new Set();
+  const images = state.images.filter((image) => !seen.has(image.ID) && seen.add(image.ID));
+  console.log(JSON.stringify({ Images: images, Containers: [], Volumes: state.volumes, BuildCache: state.buildCache }));
+} else if (a === 'image' && b === 'ls') {
+  // One row per tag; the container count is not computed here.
+  for (const image of state.images) console.log(JSON.stringify({ ...image, Containers: 'N/A', UniqueSize: 'N/A' }));
+}
 else if (a === 'image' && b === 'inspect') {
   const rows = state.images.filter((image) => image.ID === args[2]);
   if (rows.length === 0) fail('No such image');
@@ -99,7 +110,7 @@ else if (a === 'image' && b === 'inspect') {
 
 export function fakeDocker(state = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'tidyup-docker-'));
-  const full = { up: true, id: 'daemon-a', images: [], volumes: [], buildCache: [], ...state };
+  const full = { up: true, context: 'fake-ctx', id: 'daemon-a', images: [], volumes: [], buildCache: [], ...state };
   writeFileSync(join(dir, 'state.json'), JSON.stringify(full));
   writeFileSync(join(dir, 'calls.log'), '');
   const bin = join(dir, 'docker');

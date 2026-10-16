@@ -6,6 +6,8 @@
 //   volumes                          judgment  never removed; sizes only
 // IDs include the daemon ID, so an ID never applies to a different daemon. Image
 // IDs also include the tags, so approval never extends to tags added after the scan.
+// Each operation pins the docker context it started with (unless DOCKER_HOST
+// already pins the endpoint), so a `docker context use` elsewhere cannot redirect it.
 import { execFile } from 'node:child_process';
 import { access, constants } from 'node:fs/promises';
 import { delimiter, join } from 'node:path';
@@ -44,13 +46,34 @@ export async function resolveDocker(env) {
   return null;
 }
 
-function docker(bin, args, env) {
+function run(bin, args, env) {
   return new Promise((resolve, reject) => {
     execFile(bin, args, { env, timeout: TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(`docker ${args[0]} failed: ${stderr.trim().split('\n')[0] || error.message}`));
+      if (error) reject(new Error(`docker ${args.join(' ')} failed: ${stderr.trim().split('\n')[0] || error.message}`));
       else resolve(stdout);
     });
   });
+}
+
+// The docker endpoint for this operation, resolved once and cached on the context:
+// `call(args)` runs the CLI pinned to it. Null when Docker is not installed.
+async function endpoint(context) {
+  if (context.docker !== undefined) return context.docker;
+  const bin = await resolveDocker(context.env);
+  if (!bin) {
+    context.docker = null;
+    return null;
+  }
+  const pin = context.env.DOCKER_HOST ? [] : ['--context', (await run(bin, ['context', 'show'], context.env)).trim()];
+  const call = (args) => run(bin, [...pin, ...args], context.env);
+  let daemonId;
+  try {
+    daemonId = (await call(['info', '--format', '{{.ID}}'])).trim();
+  } catch (error) {
+    throw new Error(`daemon not reachable (${error.message})`);
+  }
+  context.docker = { call, daemonId };
+  return context.docker;
 }
 
 // Docker prints decimal sizes such as "24.58kB" or "1.223GB".
@@ -71,10 +94,24 @@ export function parseTimestamp(text) {
 
 const isDangling = (row) => row.Repository === '<none>' && row.Tag === '<none>';
 
-// Items derived from one consistent `docker system df -v` snapshot.
-export function itemsFromUsage(usage, daemonId, now) {
+// Tags per image ID from `docker image ls` rows (one row per tag). `system df -v`
+// shows only the first tag of an image, so it cannot supply the full set.
+export function tagsById(rows) {
+  const tags = new Map();
+  for (const row of rows) {
+    if (row.Tag === '<none>' || row.Repository === '<none>') continue;
+    tags.set(row.ID, [...(tags.get(row.ID) ?? []), `${row.Repository}:${row.Tag}`]);
+  }
+  for (const list of tags.values()) list.sort();
+  return tags;
+}
+
+// Items derived from one `docker system df -v` snapshot plus the tag map. Images
+// whose container count is unknown are reported in `skipped`, never as candidates.
+export function itemsFromUsage(usage, tags, daemonId, now) {
   const id = (kind, key = '') => itemId(NAME, `${daemonId}\n${kind}\n${key}`);
   const items = [];
+  const skipped = [];
 
   const cutoff = now.getTime() - BUILD_CACHE_IDLE_DAYS * 24 * 60 * 60 * 1000;
   const oldCache = (usage.BuildCache ?? []).filter((record) => {
@@ -89,11 +126,15 @@ export function itemsFromUsage(usage, daemonId, now) {
       kind: 'build-cache',
       label: `Docker build cache unused for ${BUILD_CACHE_IDLE_DAYS}+ days`,
       estimated_bytes: oldCache.reduce((sum, record) => sum + (parseSize(record.Size) ?? 0), 0),
-      evidence: { records: oldCache.length, idle_days: BUILD_CACHE_IDLE_DAYS, excludes: 'shared and in-use records' },
+      evidence: { records: oldCache.length, idle_days: BUILD_CACHE_IDLE_DAYS, excludes: 'shared and in-use records', daemon_id: daemonId },
     });
   }
 
   const images = usage.Images ?? [];
+  const unknown = images.filter((row) => !/^\d+$/.test(row.Containers ?? ''));
+  if (unknown.length > 0) {
+    skipped.push({ detector: NAME, reason: `${unknown.length} image(s) not evaluated: container count unavailable` });
+  }
   const dangling = images.filter((row) => isDangling(row) && row.Containers === '0');
   if (dangling.length > 0) {
     items.push({
@@ -103,20 +144,15 @@ export function itemsFromUsage(usage, daemonId, now) {
       kind: 'dangling-images',
       label: `Dangling Docker images (${dangling.length})`,
       estimated_bytes: dangling.reduce((sum, row) => sum + (parseSize(row.UniqueSize) ?? 0), 0),
-      evidence: { images: dangling.length },
+      evidence: { images: dangling.length, daemon_id: daemonId },
     });
   }
 
-  const unused = new Map();
-  for (const row of images) {
-    if (isDangling(row) || row.Containers !== '0' || row.Tag === '<none>') continue;
-    const entry = unused.get(row.ID) ?? { row, refs: [] };
-    entry.refs.push(`${row.Repository}:${row.Tag}`);
-    unused.set(row.ID, entry);
-  }
   const imageItems = [];
-  for (const [imageId, { row, refs }] of unused) {
-    refs.sort();
+  for (const row of images) {
+    const refs = tags.get(row.ID);
+    if (isDangling(row) || row.Containers !== '0' || !refs) continue;
+    const imageId = row.ID;
     imageItems.push({
       id: id('image', `${imageId}\n${refs.join('\n')}`),
       class: 'review',
@@ -124,7 +160,7 @@ export function itemsFromUsage(usage, daemonId, now) {
       kind: 'image',
       label: `Docker image ${refs.join(', ')}`,
       estimated_bytes: parseSize(row.UniqueSize),
-      evidence: { image_id: imageId, refs, created: row.CreatedAt, used_by_containers: 0 },
+      evidence: { image_id: imageId, refs, daemon_id: daemonId, created: row.CreatedAt, used_by_containers: 0 },
     });
   }
   items.push(...imageItems.sort((a, b) => (b.estimated_bytes ?? 0) - (a.estimated_bytes ?? 0)));
@@ -143,20 +179,16 @@ export function itemsFromUsage(usage, daemonId, now) {
       evidence: { largest: sized.slice(0, 10) },
     });
   }
-  return items;
+  return { items, skipped };
 }
 
 async function snapshot(context) {
-  const bin = await resolveDocker(context.env);
-  if (!bin) return null;
-  let daemonId;
-  try {
-    daemonId = (await docker(bin, ['info', '--format', '{{.ID}}'], context.env)).trim();
-  } catch (error) {
-    throw new Error(`daemon not reachable (${error.message})`);
-  }
-  const usage = JSON.parse(await docker(bin, ['system', 'df', '-v', '--format', 'json'], context.env));
-  return { bin, items: itemsFromUsage(usage, daemonId, context.now) };
+  const target = await endpoint(context);
+  if (!target) return null;
+  const usage = JSON.parse(await target.call(['system', 'df', '-v', '--format', 'json']));
+  const rows = (await target.call(['image', 'ls', '--no-trunc', '--format', '{{json .}}']))
+    .split('\n').filter((line) => line.trim() !== '').map((line) => JSON.parse(line));
+  return itemsFromUsage(usage, tagsById(rows), target.daemonId, context.now);
 }
 
 export default {
@@ -165,18 +197,20 @@ export default {
   async discover(context) {
     const result = await snapshot(context);
     if (!result) return { candidates: [], skipped: [] };
-    return { candidates: result.items.filter((item) => item.id), skipped: [] };
+    return { candidates: result.items.filter((item) => item.id), skipped: result.skipped };
   },
 
   // Fresh, cheap checks immediately before removal.
   async evaluate(candidate, context) {
     try {
-      const bin = await resolveDocker(context.env);
-      if (!bin) return { eligible: false, reason: 'docker CLI not found' };
+      const target = await endpoint(context);
+      if (!target) return { eligible: false, reason: 'docker CLI not found' };
+      const daemonId = (await target.call(['info', '--format', '{{.ID}}'])).trim();
+      if (daemonId !== candidate.evidence.daemon_id) return { eligible: false, reason: 'docker daemon changed' };
       if (candidate.kind === 'image') {
-        const tags = JSON.parse(await docker(bin, ['image', 'inspect', candidate.evidence.image_id, '--format', '{{json .RepoTags}}'], context.env));
+        const tags = JSON.parse(await target.call(['image', 'inspect', candidate.evidence.image_id, '--format', '{{json .RepoTags}}']));
         if (JSON.stringify([...tags].sort()) !== JSON.stringify(candidate.evidence.refs)) return { eligible: false, reason: 'image tags changed' };
-        const users = (await docker(bin, ['container', 'ls', '-a', '-q', '--filter', `ancestor=${candidate.evidence.image_id}`], context.env)).trim();
+        const users = (await target.call(['container', 'ls', '-a', '-q', '--filter', `ancestor=${candidate.evidence.image_id}`])).trim();
         if (users) return { eligible: false, reason: 'image is used by a container' };
         return { eligible: true };
       }
@@ -190,22 +224,21 @@ export default {
 
   async detect(context) {
     try {
-      const result = await snapshot(context);
-      return { items: result?.items ?? [], skipped: [] };
+      return (await snapshot(context)) ?? { items: [], skipped: [] };
     } catch (error) {
       return { items: [], skipped: [{ detector: NAME, reason: error.message }] };
     }
   },
 
   async remove(item, context) {
-    const bin = await resolveDocker(context.env);
-    if (!bin) throw new Error('docker CLI not found');
+    const target = await endpoint(context);
+    if (!target) throw new Error('docker CLI not found');
     if (item.kind === 'build-cache') {
-      await docker(bin, ['builder', 'prune', '--force', '--filter', `until=${BUILD_CACHE_IDLE_DAYS * 24}h`], context.env);
+      await target.call(['builder', 'prune', '--force', '--filter', `until=${BUILD_CACHE_IDLE_DAYS * 24}h`]);
     } else if (item.kind === 'dangling-images') {
-      await docker(bin, ['image', 'prune', '--force'], context.env);
+      await target.call(['image', 'prune', '--force']);
     } else if (item.kind === 'image') {
-      for (const ref of item.evidence.refs) await docker(bin, ['image', 'rm', ref], context.env);
+      for (const ref of item.evidence.refs) await target.call(['image', 'rm', ref]);
     } else {
       throw new Error(`cannot remove ${item.kind}`);
     }

@@ -22,7 +22,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - review: unused tagged images;
   - judgment: volumes.
 
-  IDs are bound to the daemon, and image IDs also to their tags.
+  IDs are bound to the daemon, and image IDs also to their tags. Every
+  operation pins the docker context it started with. Images whose container
+  count is unknown are reported as skipped.
 - `apply` deletes the selected items. For each item it re-checks the path and
   re-evaluates eligibility immediately before removing it, and it reports one
   outcome per item.
