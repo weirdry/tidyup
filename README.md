@@ -78,7 +78,8 @@ npx skills@1.7.2 add 'weirdry/tidyup#v0.1.0' -g -a codex claude-code
 ```
 
 This installs the skill into `~/.agents/skills/tidyup`, which Codex reads, and
-links it from `~/.claude/skills/tidyup` for Claude Code.
+links it from `~/.claude/skills/tidyup` for Claude Code. Skills CLI 1.7.2 itself
+needs Node.js 22.20 or newer; tidyup runs on any Node.js 22+.
 
 For development, link a checkout instead:
 
