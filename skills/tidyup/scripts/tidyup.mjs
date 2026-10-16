@@ -81,11 +81,11 @@ export async function main(argv, {
   try {
     const roots = await resolveRoots(home, values.root ?? []);
     if (command === 'scan') {
-      const report = await scan({ home, roots, deep: Boolean(values.deep), now, statfs });
+      const report = await scan({ home, roots, deep: Boolean(values.deep), now, statfs, env });
       stdout.write(values.json ? `${JSON.stringify(report, null, 2)}\n` : renderScan(report, home));
       return EXIT[report.level] ?? EXIT.ok;
     }
-    const result = await apply({ ids, reviewed: values.reviewed ?? [], home, roots, now, statfs });
+    const result = await apply({ ids, reviewed: values.reviewed ?? [], home, roots, now, statfs, env });
     stdout.write(values.json ? `${JSON.stringify(result, null, 2)}\n` : renderApply(result, home));
     return result.outcomes.every((o) => o.outcome === 'deleted') ? EXIT.ok : EXIT.error;
   } catch (error) {

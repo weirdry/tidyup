@@ -24,32 +24,33 @@ export async function removalRefusal(item, allowedRoots) {
 export async function applyItem(id, { detector, candidate, reviewedSet, context }) {
   if (!detector) return { id, outcome: 'refused', reason: 'unknown detector' };
   if (!candidate) return { id, outcome: 'refused', reason: 'not found (pass the same --root options as scan)' };
-  const base = { id, path: candidate.path };
+  const base = candidate.path === undefined ? { id, label: candidate.label } : { id, path: candidate.path };
+  const pathCheck = () => (candidate.path === undefined ? null : removalRefusal(candidate, detector.allowedRoots(context)));
   if (candidate.class === 'review' && !reviewedSet.has(id)) {
     return { ...base, outcome: 'refused', reason: 'review item requires --reviewed' };
   }
   if (candidate.class !== 'routine' && candidate.class !== 'review') {
     return { ...base, outcome: 'refused', reason: `${candidate.class} items cannot be applied` };
   }
-  const pathReason = await removalRefusal(candidate, detector.allowedRoots(context));
+  const pathReason = await pathCheck();
   if (pathReason) return { ...base, outcome: 'refused', reason: pathReason };
   const verdict = await detector.evaluate(candidate, context);
   if (!verdict.eligible) return { ...base, outcome: 'refused', reason: `no longer eligible: ${verdict.reason}` };
-  const lateReason = await removalRefusal(candidate, detector.allowedRoots(context));
+  const lateReason = await pathCheck();
   if (lateReason) return { ...base, outcome: 'refused', reason: lateReason };
   try {
-    await detector.remove(candidate);
+    await detector.remove(candidate, context);
     return { ...base, outcome: 'deleted' };
   } catch (error) {
     return { ...base, outcome: 'failed', reason: error.message };
   }
 }
 
-export async function apply({ ids, reviewed, home, roots, now, statfs }) {
+export async function apply({ ids, reviewed, home, roots, now, statfs, env }) {
   const before = await measureHeadroom(home, statfs);
   const requested = [...new Set([...ids, ...reviewed])];
   const reviewedSet = new Set(reviewed);
-  const context = { roots, now, home };
+  const context = { roots, now, home, env };
 
   const candidates = new Map();
   const skipped = [];

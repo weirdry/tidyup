@@ -14,6 +14,10 @@ function table(rows) {
     .join('  ').trimEnd()).join('\n');
 }
 
+function describe(item, home) {
+  return item.path === undefined ? item.label : displayPath(item.path, home);
+}
+
 export function renderScan(report, home) {
   const lines = [headroomLine(report), `Measured: ${displayPath(report.measured_path, home)}`, ''];
 
@@ -22,9 +26,9 @@ export function renderScan(report, home) {
   } else if (report.items.length === 0) {
     lines.push('No cleanup candidates found.');
   } else {
-    const rows = [['ID', 'CLASS', 'EST. SIZE', 'PATH']];
+    const rows = [['ID', 'CLASS', 'EST. SIZE', 'ITEM']];
     for (const item of report.items) {
-      rows.push([item.id ?? '-', item.class, formatBytes(item.estimated_bytes), displayPath(item.path, home)]);
+      rows.push([item.id ?? '-', item.class, formatBytes(item.estimated_bytes), describe(item, home)]);
     }
     lines.push(table(rows), '');
     const routine = report.items.filter((item) => item.class === 'routine');
@@ -45,7 +49,7 @@ export function renderScan(report, home) {
 export function renderApply(result, home) {
   const lines = [];
   for (const o of result.outcomes) {
-    const target = o.path ? displayPath(o.path, home) : '';
+    const target = o.path ? displayPath(o.path, home) : (o.label ?? '');
     const reason = o.reason ? ` (${o.reason})` : '';
     lines.push(`${o.outcome.padEnd(8)}  ${o.id}  ${target}${reason}`.trimEnd());
   }

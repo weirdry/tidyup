@@ -1,13 +1,16 @@
 // Registered detectors. Each provides:
-//   name, class
-//   discover(context)        → { candidates, skipped }: cheap candidate locations
-//   evaluate(candidate, ctx) → { eligible, reason, evidence, error }: eligibility now
-//   detect(context)          → { items, skipped }: eligible items with size estimates (scan)
-//   allowedRoots(context)    → real paths that bound where items may live
-//   remove(item)             → deletes one item (apply)
+//   name
+//   discover(context)        → { candidates, skipped }: candidates that have IDs
+//   evaluate(candidate, ctx) → { eligible, reason, error }: eligibility right now
+//   detect(context)          → { items, skipped }: items with class and size estimate (scan)
+//   remove(item, context)    → deletes one item (apply)
+// Detectors whose items have a filesystem `path` also provide
+//   allowedRoots(context)    → real paths that bound where those items may live
+// Other items carry a `label` instead of a `path`.
+import docker from './docker.mjs';
 import rustTarget from './rust-target.mjs';
 
-export const DETECTORS = [rustTarget];
+export const DETECTORS = [rustTarget, docker];
 
 export function detectorFor(id) {
   const separator = id.indexOf(':');
