@@ -7,9 +7,10 @@ quietly fill a developer's disk. tidyup measures free space, explains which item
 are safe to rebuild and why, and deletes only the items you select. Claude Code,
 Codex, and scheduled agent tasks use the same script and instructions.
 
-> **Status: under development.** No release exists yet. The accepted v1 behavior
-> is described in [docs/design.md](docs/design.md). This README describes the
-> target until the first release.
+> **Status: under development.** No release exists yet. `scan` and `apply` work
+> for Rust build output; the remaining v1 detectors are tracked in
+> [#2](https://github.com/weirdry/tidyup/issues/2). The accepted v1 behavior is
+> described in [docs/design.md](docs/design.md).
 
 ## How it works
 
@@ -29,6 +30,18 @@ Codex, and scheduled agent tasks use the same script and instructions.
 - **Scheduled callers can run it.** `scan --json` is stateless and returns the
   level as its exit code. A scheduled agent can report changes in headroom and
   never deletes.
+
+## Usage
+
+```sh
+tidyup scan                 # headroom; candidates when ≤ 20% free
+tidyup scan --deep          # candidates regardless of headroom
+tidyup scan --json          # machine-readable; exit code 0/10/20 = ok/recommend/urgent
+tidyup apply <id> [<id>...] # delete selected candidates after re-checking them
+```
+
+`tidyup` here means the skill's `scripts/tidyup` launcher. Agents run it as the
+skill describes.
 
 ## Requirements
 

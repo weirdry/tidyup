@@ -1,7 +1,8 @@
 # tidyup design
 
-Status: accepted v1 target. Nothing described here is implemented yet; the
-[CHANGELOG](../CHANGELOG.md) records what has shipped.
+Status: accepted v1 target, implemented incrementally under
+[#2](https://github.com/weirdry/tidyup/issues/2). The [CHANGELOG](../CHANGELOG.md)
+records what is implemented.
 
 ## Purpose
 
@@ -37,6 +38,16 @@ order, validates that the major version is at least 22, and execs
 If no suitable Node is found, the launcher exits with a setup message. A skill
 installation does not guarantee that Node is on the `PATH` of GUI apps or
 scheduled tasks, so scheduled callers should invoke the launcher by absolute path.
+
+## Commands
+
+```text
+tidyup scan [--deep] [--root <dir>]... [--json]
+tidyup apply <id>... [--reviewed <id>]... [--root <dir>]... [--json]
+```
+
+IDs come from detection over the project roots, so `apply` must receive the
+same `--root` options as the `scan` that produced them.
 
 ## Headroom
 
@@ -81,7 +92,7 @@ conversation.
 
 | Detector | Class | Selection | Removal |
 | --- | --- | --- | --- |
-| `rust-target` | routine | `target/` next to a `Cargo.toml` under project roots, idle 14 days | remove directory |
+| `rust-target` | routine | `target/` next to a `Cargo.toml` under project roots, idle 14 days. The search goes at most 4 levels deep and skips hidden directories, `node_modules`, and `target`. A Cargo marker is required: a `CACHEDIR.TAG` with the Cargo signature, or a `<profile>/.fingerprint` directory (some front ends, such as maturin, omit the tag) | remove directory |
 | `docker-build-cache` | routine | build cache older than 7 days | `docker builder prune --force --filter until=168h`, evaluated at apply |
 | `docker-dangling-images` | routine | dangling images | `docker image prune --force` |
 | `docker-unused-images` | review | tagged images used by no container | `docker rmi <image-id>` |
@@ -133,6 +144,7 @@ object:
   "available_bytes": 0,
   "available_percent": 0,
   "level": "ok|recommend|urgent",
+  "candidates_measured": true,
   "items": [
     {
       "id": "…",
@@ -148,6 +160,9 @@ object:
 }
 ```
 
+`candidates_measured` is `false` when detectors did not run, at `ok` without
+`--deep`. An empty `items` list then means "not measured", not "nothing found".
+
 The tool is stateless. `fingerprint` is a deterministic hash of the eligible
 item IDs, so callers can deduplicate notifications. A scheduled caller typically
 compares host, level, fingerprint, and skipped set with its previous run.
@@ -156,7 +171,8 @@ Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| 0, 10, 20 | Headroom level, as in the table above |
+| 0, 10, 20 | `scan`: headroom level, as in the table above |
+| 0 | `apply`: every requested item was deleted |
 | 1 | Error, including setup failure, or `apply` with any refused or failed item |
 | 2 | Usage error |
 
