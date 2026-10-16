@@ -8,7 +8,7 @@ are safe to rebuild and why, and deletes only the items you select. Claude Code,
 Codex, and scheduled agent tasks use the same script and instructions.
 
 > **Status: under development.** No release exists yet. `scan` and `apply` work
-> for Rust build output, Docker, and package caches; the remaining v1 detectors are tracked in
+> for Rust build output, Docker, package caches, temp clones, and agent scratch; the remaining v1 work is tracked in
 > [#2](https://github.com/weirdry/tidyup/issues/2). The accepted v1 behavior is
 > described in [docs/design.md](docs/design.md).
 
