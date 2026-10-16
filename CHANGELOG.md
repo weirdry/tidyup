@@ -25,6 +25,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   IDs are bound to the daemon, and image IDs also to their tags. Every
   operation pins the docker context it started with. Images whose container
   count is unknown are reported as skipped.
+- The `caches` detector covers npm, pnpm, uv, and the Go build and module
+  caches. It locates each cache by asking the tool from the home directory, and
+  cleans it only with the tool's own command. The pnpm estimate is unknown,
+  because prune removes only unreferenced packages.
 - `apply` deletes the selected items. For each item it re-checks the path and
   re-evaluates eligibility immediately before removing it, and it reports one
   outcome per item.
