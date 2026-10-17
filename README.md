@@ -7,7 +7,7 @@ quietly fill a developer's disk. tidyup measures free space, explains which item
 are safe to rebuild and why, and deletes only the items you select. Claude Code,
 Codex, and scheduled agent tasks use the same script and instructions.
 
-> **Status: v0.1.0.** The behavior is specified in [docs/design.md](docs/design.md),
+> **Status: v0.1.1.** The behavior is specified in [docs/design.md](docs/design.md),
 > and changes are listed in the [changelog](CHANGELOG.md).
 
 ## How it works
@@ -74,7 +74,7 @@ Install the released version for Codex and Claude Code with the
 [Skills CLI](https://github.com/vercel-labs/skills):
 
 ```sh
-npx skills@1.7.2 add 'weirdry/tidyup#v0.1.0' -g -a codex claude-code
+npx skills@1.7.2 add 'weirdry/tidyup#v0.1.1' -g -a codex claude-code
 ```
 
 This installs the skill into `~/.agents/skills/tidyup`, which Codex reads, and

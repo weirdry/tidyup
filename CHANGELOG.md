@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Fixed
 
 - A failed tool command is reported with its exit code, signal, or timeout and
@@ -66,5 +68,6 @@ items a user selects.
 - The skill describes the complete interactive and scheduled workflows, and the
   README includes a scheduled-check example.
 
-[Unreleased]: https://github.com/weirdry/tidyup/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/weirdry/tidyup/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/weirdry/tidyup/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/weirdry/tidyup/releases/tag/v0.1.0
