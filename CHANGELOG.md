@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A failed tool command is reported with its exit code, signal, or timeout and
+  a bounded excerpt of stderr and stdout, so a failure that prints only to
+  stdout, such as `pnpm store path`, is no longer reported without detail.
+  Likely credentials in the reason are masked on a best-effort basis.
+- `app-containers` now says why installed apps could not be identified:
+  `mdfind` was not found, the Spotlight query failed, or its result lacked
+  Finder. It no longer reports every case as "Spotlight is unavailable".
+
 ## [0.1.0] - 2026-10-17
 
 First release: tidyup measures disk headroom on macOS, lists cleanup candidates

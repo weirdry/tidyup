@@ -165,6 +165,30 @@ directories. They run with the running Node's directory first on `PATH`, so
 Node-based CLIs work from GUI apps and scheduled tasks. A tool that is not
 installed is silently absent.
 
+When a tool command fails, the reason is one line built from the command and
+its arguments, the cause, and an excerpt of the output:
+
+- **Cause:** the exit code, the signal, a timeout (with the limit), an output
+  that exceeded the buffer, or a spawn error code such as `ENOENT`.
+- **Output excerpt:** the first three non-empty lines of stderr, followed by
+  those of stdout marked `stdout:`, so a tool that reports errors on stdout (as
+  pnpm can) still explains itself. Each excerpt is capped at 300 characters and the command at
+  160. Terminal escape sequences are removed and other control characters are
+  escaped. Node's own error message is never used, because it embeds the full
+  command and stderr.
+- **Masking:** before truncation, likely credentials are replaced with `***`:
+  values of environment variables passed to the tool whose names suggest
+  secrets (such as `*TOKEN*`, `*SECRET*`, `*PASSWORD*`, `*AUTH*`) and values of
+  `--flag value` or `--flag=value` arguments with sensitive names, wherever
+  they appear; URL user info; authorization headers and bearer tokens;
+  `key=value` pairs with sensitive names; quoted values of such keys, as in
+  JSON, whole up to the closing quote, or to the end of the inspected output
+  when there is none; and a few well-known token prefixes. Terminal
+  escape sequences are removed before matching, so styling cannot split a
+  secret. Masking inspects the first 64 KiB of each stream; a known value that
+  this limit cuts is masked as well. This is a best-effort filter; it cannot
+  recognize every secret format.
+
 Judgment detectors never offer IDs. Each item carries `evidence.summary` and
 `evidence.hint`, which the scan prints under "Judgment items".
 
@@ -176,8 +200,13 @@ Judgment detectors never offer IDs. Each item carries `evidence.summary` and
 
 - **app-containers:** relies on one Spotlight query for the bundle identifiers
   of installed apps. An identifier counts as installed when an app's identifier
-  equals it or is its parent, as with extensions and helpers. If Spotlight does
-  not answer, the detector is skipped with that reason.
+  equals it or is its parent, as with extensions and helpers. Finder is always
+  installed, so a result without `com.apple.finder` is treated as incomplete.
+  When the installed apps cannot be established, the detector lists no
+  containers and is skipped with a reason that distinguishes the case: `mdfind`
+  was not found, the query failed (with the tool failure reason above), or the
+  result lacked Finder (with its identifier count). The reason does not guess
+  at the cause.
 - **UUID-named containers:** their metadata is protected by macOS, so their app
   cannot be identified.
 - **Size floors:** they keep hundreds of small containers out of the table.

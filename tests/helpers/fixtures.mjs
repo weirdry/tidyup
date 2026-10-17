@@ -127,10 +127,12 @@ export function fakeDocker(state = {}) {
 // Fake npm, pnpm, uv, go, brew and mdfind CLIs sharing `state.json` in their
 // directory, with cache paths { npm, pnpm, uv, goCache, goModCache } (null: no
 // cache), `goEnvFlags` (standing in for GOFLAGS set in the user's go env file),
-// `brewDryRun` (the text `brew cleanup --dry-run` prints), and `apps`
-// ([path, bundle id] pairs Spotlight reports as installed). They log
-// [tool, cwd, ...args] to `calls.log`. The shebang uses `env node` on purpose, so
-// they work only when the caller provides node on PATH, as tidyup does.
+// `brewDryRun` (the text `brew cleanup --dry-run` prints), `apps`
+// ([path, bundle id] pairs Spotlight reports as installed), and `failures`
+// ({ tool: { stdout, stderr, code } }: the tool prints these and exits with `code`,
+// default 1). They log [tool, cwd, ...args] to `calls.log`. The shebang uses
+// `env node` on purpose, so they work only when the caller provides node on PATH,
+// as tidyup does.
 const FAKE_TOOL = `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
@@ -146,7 +148,12 @@ const fail = () => { process.stderr.write('unsupported: ' + tool + ' ' + args.jo
 // Like real go: env overrides the go env file unless GOENV=off; GOFLAGS applies to every command.
 const goVar = (name, fallback) => process.env[name] || fallback;
 const goFlags = (process.env.GOFLAGS || (process.env.GOENV === 'off' ? '' : state.goEnvFlags || '')).split(' ');
-if (tool === 'npm' && has('config', 'get', 'cache')) print(state.npm);
+const failure = state.failures?.[tool];
+if (failure) {
+  process.stdout.write(failure.stdout ?? '');
+  process.stderr.write(failure.stderr ?? '');
+  process.exitCode = failure.code ?? 1;
+} else if (tool === 'npm' && has('config', 'get', 'cache')) print(state.npm);
 else if (tool === 'npm' && has('cache', 'clean', '--force')) wipe(path.join(option('--cache') || state.npm, '_cacache'));
 else if (tool === 'pnpm' && has('store', 'path')) print(state.pnpm);
 else if (tool === 'pnpm' && has('store', 'prune')) {}

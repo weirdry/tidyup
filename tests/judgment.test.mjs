@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { after, beforeEach, describe, test } from 'node:test';
 
 import {
-  LEFTOVER_MIN_BYTES, UNIDENTIFIED_MIN_BYTES, expandPath, huggingFaceHub, isInstalled, leftoverContainers, parseBrewFree,
+  LEFTOVER_MIN_BYTES, UNIDENTIFIED_MIN_BYTES, expandPath, huggingFaceHub, installedBundleIds, isInstalled, leftoverContainers, parseBrewFree,
 } from '../skills/tidyup/scripts/lib/detectors/judgment.mjs';
 import { EXIT, main } from '../skills/tidyup/scripts/tidyup.mjs';
 import { fakeTools, makeHome, removeTree, runMain, writeFiles } from './helpers/fixtures.mjs';
@@ -116,12 +116,52 @@ describe('judgment detectors through the CLI', () => {
     assert.deepEqual(judgment(await scan(), 'homebrew'), []);
   });
 
-  test('app containers are skipped with a reason when Spotlight cannot identify apps', async () => {
-    writeFiles(home, { 'Library/Containers/com.removed.app/Data/file': 'x' });
-    tools.update({ apps: [] });
-    const report = await scan();
+  // Each Spotlight gap skips app-containers with its own reason, lists no
+  // leftovers, and leaves the rest of the scan and its exit code unchanged.
+  const spotlightGap = async () => {
+    writeFiles(home, {
+      'Library/Containers/com.removed.app/Data/file': 'x',
+      '.cache/huggingface/hub/models--org--m/blobs/a': 'x',
+    });
+    const result = await runMain(main, ['scan', '--json'], { home, percent: 5, tools });
+    assert.equal(result.code, EXIT.urgent);
+    const report = JSON.parse(result.stdout);
     assert.deepEqual(judgment(report, 'app-containers'), []);
-    assert.ok(report.skipped.some((entry) => /Spotlight is unavailable/.test(entry.reason)));
+    assert.equal(judgment(report, 'model-caches').length, 1);
+    const entries = report.skipped.filter((entry) => entry.detector === 'app-containers');
+    assert.equal(entries.length, 1, JSON.stringify(report.skipped));
+    assert.deepEqual(Object.keys(entries[0]), ['detector', 'reason']);
+    assert.doesNotMatch(entries[0].reason, /disabled|permission|unavailable/i);
+    return entries[0].reason;
+  };
+
+  test('a Spotlight result without Finder is reported as incomplete', async () => {
+    tools.update({ apps: [] });
+    assert.equal(
+      await spotlightGap(),
+      'the Spotlight query for installed apps returned 0 bundle identifier(s) but not com.apple.finder; the result looks incomplete, '
+        + 'so installed apps cannot be identified and leftover containers are not listed (`mdutil -s /` shows the Spotlight indexing status)',
+    );
+    tools.update({ apps: [['/Applications/Synthetic.app', 'com.example.synthetic']] });
+    assert.match(await spotlightGap(), /returned 1 bundle identifier\(s\) but not com\.apple\.finder/);
+  });
+
+  test('a failed Spotlight query is reported with the command\'s exit code and output', async () => {
+    tools.update({ failures: { mdfind: { stdout: 'synthetic partial output\n', stderr: 'synthetic query failure\n', code: 2 } } });
+    assert.equal(
+      await spotlightGap(),
+      'the Spotlight query for installed apps failed, so installed apps cannot be identified and leftover containers are not listed: '
+        + 'mdfind -attr kMDItemCFBundleIdentifier kMDItemContentType == \'com.apple.application-bundle\' failed (exit code 2): '
+        + 'synthetic query failure; stdout: synthetic partial output',
+    );
+  });
+
+  test('a missing mdfind is reported as such', async () => {
+    // /usr/bin/mdfind exists on macOS, so the resolved path is passed in directly.
+    assert.deepEqual(await installedBundleIds(null, { HOME: home, PATH: tools.dir }), {
+      reason: 'mdfind (the Spotlight command-line tool) was not found, so installed apps cannot be identified and leftover containers are not listed',
+    });
+    assert.deepEqual(tools.calls(), []);
   });
 
   test('judgment items cannot be applied', async () => {

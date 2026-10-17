@@ -107,19 +107,26 @@ export const modelCaches = {
   },
 };
 
-// Bundle identifiers of installed apps, from one Spotlight query. Null when
-// Spotlight does not answer (it then cannot tell installed apps apart).
-async function installedBundleIds(env) {
-  const bin = await resolveTool('mdfind', env);
-  if (!bin) return null;
+// Bundle identifiers of installed apps, from one Spotlight query run with `bin`
+// (the resolved mdfind, or null when it is not found): `{ ids }`, or `{ reason }`
+// when the installed apps cannot be reliably established. Finder is always
+// installed, so a result without it is treated as incomplete.
+const NO_APPS = 'so installed apps cannot be identified and leftover containers are not listed';
+export async function installedBundleIds(bin, env) {
+  if (!bin) return { reason: `mdfind (the Spotlight command-line tool) was not found, ${NO_APPS}` };
+  let output;
   try {
-    const output = await runTool(bin, ['-attr', 'kMDItemCFBundleIdentifier', "kMDItemContentType == 'com.apple.application-bundle'"], env);
-    const ids = new Set();
-    for (const match of output.matchAll(/kMDItemCFBundleIdentifier = (\S+)/g)) ids.add(match[1].toLowerCase());
-    return ids.has('com.apple.finder') ? ids : null;
-  } catch {
-    return null;
+    output = await runTool(bin, ['-attr', 'kMDItemCFBundleIdentifier', "kMDItemContentType == 'com.apple.application-bundle'"], env);
+  } catch (error) {
+    return { reason: `the Spotlight query for installed apps failed, ${NO_APPS}: ${error.message}` };
   }
+  const ids = new Set();
+  for (const match of output.matchAll(/kMDItemCFBundleIdentifier = (\S+)/g)) ids.add(match[1].toLowerCase());
+  if (ids.has('com.apple.finder')) return { ids };
+  return {
+    reason: `the Spotlight query for installed apps returned ${ids.size} bundle identifier(s) but not com.apple.finder; `
+      + `the result looks incomplete, ${NO_APPS} (\`mdutil -s /\` shows the Spotlight indexing status)`,
+  };
 }
 
 // True when an installed app's identifier equals `id` or is a parent of it
@@ -160,12 +167,12 @@ export const appContainers = {
       if (error.code === 'ENOENT') return { items: [], skipped: [] };
       return { items: [], skipped: [{ detector: 'app-containers', reason: `cannot read ${root}: ${error.code ?? error.message}` }] };
     }
-    const installed = await installedBundleIds(context.env);
-    if (!installed) return { items: [], skipped: [{ detector: 'app-containers', reason: 'Spotlight is unavailable, so installed apps cannot be identified' }] };
+    const installed = await installedBundleIds(await resolveTool('mdfind', context.env), context.env);
+    if (!installed.ids) return { items: [], skipped: [{ detector: 'app-containers', reason: installed.reason }] };
 
     const { sizes, unreadable, error: duError } = await childSizes(root);
     const items = [];
-    for (const { path, id, bytes, identified } of leftoverContainers(sizes, installed)) {
+    for (const { path, id, bytes, identified } of leftoverContainers(sizes, installed.ids)) {
       const modified = (await stat(path).catch(() => null))?.mtime;
       items.push({
         class: 'judgment',
