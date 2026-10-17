@@ -146,6 +146,30 @@ describe('package caches', () => {
     }
   });
 
+  test('a pnpm failure that prints only to stdout is skipped with that output; the scan continues', async () => {
+    tools.update({ failures: { pnpm: { stdout: ' ERR_PNPM_SYNTHETIC  Synthetic store path failure\n\nSynthetic detail\n' } } });
+    const result = await runMain(main, ['scan', '--json'], { home, percent: 5, tools });
+    assert.equal(result.code, EXIT.urgent);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.items.filter((item) => item.detector === 'caches').map((item) => item.kind), ['npm', 'uv', 'go-build', 'go-mod']);
+    const entry = report.skipped.find((skip) => skip.detector === 'caches');
+    assert.deepEqual(Object.keys(entry), ['detector', 'reason']);
+    assert.equal(entry.reason, 'pnpm store path failed (exit code 1): stdout: ERR_PNPM_SYNTHETIC  Synthetic store path failure | Synthetic detail');
+
+    const human = await runMain(main, ['scan'], { home, percent: 5, tools });
+    assert.equal(human.code, EXIT.urgent);
+    assert.match(human.stdout, /\n {2}caches: pnpm store path failed \(exit code 1\): stdout: ERR_PNPM_SYNTHETIC .*Synthetic detail\n/);
+  });
+
+  test('a tool failure does not leak a sensitive environment value into the report', async () => {
+    const secret = 'synthetic-npm-token-0001';
+    tools.update({ failures: { pnpm: { stdout: `//registry.example.test/:_authToken=${secret}\n`, stderr: `token ${secret} rejected\n` } } });
+    const result = await runMain(main, ['scan', '--json'], { home, percent: 5, tools, env: { NPM_TOKEN: secret } });
+    assert.equal(result.code, EXIT.urgent);
+    assert.ok(!result.stdout.includes(secret), result.stdout);
+    assert.match(JSON.parse(result.stdout).skipped.find((skip) => skip.detector === 'caches').reason, /token \*\*\* rejected; stdout: .*_authToken=\*\*\*$/);
+  });
+
   test('apply refuses a cache whose location changed after the scan', async () => {
     const npm = (await cacheItems()).find((item) => item.kind === 'npm');
     writeFiles(home, { 'other-npm/_cacache/entry': 'x' });
